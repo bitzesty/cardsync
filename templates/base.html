@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% block head %}
+  <title>Share a Trello Card</title>
+  <meta name="description" content="Do you have information you want to make public on some Trello cards, but you don't want to disclose your entire board? Here's the solution.">
+  <link rel="stylesheet" href="/static/site.css">
+  {% endblock %}
+  <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
+  <script>
+  (function(t,r,a,c,k){k=r.createElement('script');k.type='text/javascript';
+  k.async=true;k.src=a;k.id='ma';r.getElementsByTagName('head')[0].appendChild(k);
+  t.maq=[];t.mai=c;t.ma=function(){t.maq.push(arguments)};
+  })(window,document,'http://spooner.alhur.es:5984/microanalytics/_design/microanalytics/_rewrite/tracker.js','71f2f4a2');
+  
+  ma('pageView');
+  </script>
+</head>
+
+<body>
+  {% block body %}{% endblock %}
+</body>
+
+</html>

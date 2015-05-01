@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+
+{% block body %}
+<div class="row section" id="header">
+  <div class="container" id="title">
+    <img src="/static/logo.png" class="center animate dropIn">
+    <h1 class="center caps">{{ config.SERVICE_NAME }}</h1>
+  </div>
+  <div class="container">
+    <div class="col-1-1">
+      <h1 style="text-align: center">Get a link to a private Card that anyone can see.</h1>
+      <h3 class="light">You're already using <strong>Trello</strong> to organize everything, now you can publish and share pieces of your content with anyone without compromising the whole Board!</h3>
+      <form method="post" action="/share">
+        <table style="border:none; margin:auto;">
+          <tbody><tr><td style="border:none;width:400px">
+            <input name="card" style="margin: 0" placeholder="card id, shortlink or full URL">
+          </td><td style="border:none">
+            <button type="submit" style="position:relative; padding: 0.7em;"><span style="display:inline-block;">Get a public URL for this card</span></button>
+          </td></tr><tr><td style="text-align: right">
+            <label for="force"><input id="force" type="checkbox" name="force"> Update an already published Card?</label>
+          </td></tr></tbody>
+        </table>
+      </form>
+      <h3 style="text-align: right">No sign up needed.</h3>
+    </div>
+  </div>
+  <div class="container block">
+    <div class="col-1-1">
+      <p>Or you can just, in all cases, simply go to <span class="code">{{ request.url_root }}{{ '<card id or shortlink>' }}</span> or <span class="code">{{ request.url_root }}{{ '<full card url>' }}</span> to authorize and get a link to your Card.</p>
+    </div>
+  </div>
+</div>
+<div class="row section grey">
+  <div class="container">
+    <div class="col-1-2">
+      <p><strong>{{ config.SERVICE_NAME }}</strong> is a free service brought to you by <a href="http://websitesfortrello.com/">Websites for Trello</a>. To contact us use the form on the right.</p>
+    </div>
+    <div class="col-1-2">
+      <form action="http://formspree.io/fiatjaf@gmail.com" method="POST">
+        <input type="text" name="_gotcha" style="display:none" />
+        <input type="email" name="email" placeholder="Your email">
+        <textarea name="message" rows="5" placeholder="Your message"></textarea>
+        <input type="submit" value="Send">
+      </form>
+    </div>
+  </div>
+</div>
+<div class="row section grey">
+  <div class="container">
+    <p class="footer center">
+      <a href="{{config.SERVICE_URL}}">{{config.SERVICE_NAME}}</a> is not affiliated, sponsored or endorsed in any way by <a href="https://trello.com/">Trello</a>.
+    </p>
+    <p class="footer center">
+      Logo by <a href="http://thenounproject.com/niftyacres/">Stephen JB Thomas</a> at <a href="http://thenounproject.com/term/card/17310/">The Noun Project</a>.
+    </p>
+  </div>
+</div>
+{% endblock %}
+
