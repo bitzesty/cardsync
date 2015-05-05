@@ -6,3 +6,4 @@ venv
 *.swo
 .sass-cache
 node_modules
+*.js

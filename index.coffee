@@ -2,6 +2,7 @@ settings   = require './settings'
 
 util       = require 'util'
 diff       = require 'deep-diff'
+moment     = require 'moment'
 express    = require 'express'
 superagent = require 'superagent'
 bodyParser = require 'body-parser'
@@ -36,7 +37,8 @@ app.post '/webhooks/trello-bot', (request, response) ->
           data: {
             name: payload.action.data.card.name
           }
-          comments: {}
+          comments: {} # this is where we store the id of the target comments
+                       # when the source comments are in this card.
         }
 
         db.cards.update(
@@ -52,7 +54,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
             callbackURL: settings.SERVICE_URL + '/webhooks/mirrored-card'
             idModel: card._id
           }, (err, data) ->
-            throw err if err
+            console.log err if err
             db.cards.update(
               {_id: card._id}
               {$set: {webhook: data.id}}
@@ -111,69 +113,76 @@ app.post '/webhooks/trello-bot', (request, response) ->
           # update db removing webhook id and card data (desc, name, comments, attachments, checklists)
           db.cards.update(
             {_id: payload.action.data.card.id}
-            {$unset: {webhook: '', data: '', comments: ''}}
+            {$unset: {webhook: '', data: ''}}
           )
         )
 
 app.post '/debounced/apply-mirror', (request, response) ->
   console.log 'applying mirror for changes in', Object.keys request.body.merge
-  for cardId of request.body.merge
+  for cardId, comments of request.body.merge
     # fetch both cards, updated and mirrored
     db.cards.find({ $or: [ { _id: cardId }, { mirror: cardId } ] }).toArray().then((cards) ->
       ids = (c._id for c in cards)
       console.log 'found', ids, 'mirroring', cardId
 
       source = (cards.splice (ids.indexOf cardId), 1)[0]
-      console.log 'SOURCE:', source
       for target in cards
-        console.log 'TARGET:', target
 
         # name, due, desc
-        for difference in diff.diff target.data, source.data
+        for difference in diff.diff(target.data, source.data) or []
           console.log 'applying data diff', difference
           if difference.kind == 'E' and difference.path.length == 1
             trello.put "/1/cards/#{target._id}/#{difference.path[0]}", {value: difference.rhs}, (err) ->
               console.log err if err
-        console.log 'finished applying data diff'
 
         # comments
-        cdiff = diff.diff target.comments, source.comments
-        console.log 'cdiff:', typeof cdiff, 'length:', cdiff.length
-        for difference in diff
-          console.log 'applying comment diff', difference
-          if difference.path.length == 1
-            comment = difference.rhs
-            if difference.kind == 'N' # add
-              console.log 'creating comment'
-              trello.post "/1/cards/#{cardId}/actions/comments",
-                { text: "[#{comment.author.name}](https://trello.com/#{comment.author.id}) at [#{comment.date}](https://trello.com/c/#{source._id})\n\n---\n\n#{comment.text}" }
+        for _, comment of comments
+          switch comment.kind
+            when 'create'
+              trello.post "/1/cards/#{target._id}/actions/comments",
+                { text: mirroredCommentText comment, source._id }
               , (err, data) ->
-                throw err if err
+                console.log err if err
                 console.log 'comment created successfully:', data
-                # TODO update target model
-            else if difference.kind == 'D' # delete
-              console.log 'deleting comment'
-              commentId = difference.path[0]
-              trello.delete "/1/actions/#{commentId}", (err, data) ->
-                throw err if err
-                console.log 'comment deleted successfully:', data
-                # TODO update target model
-          else if difference.path.length == 2 and difference.kind == 'E' # edit
-            console.log 'updating comment'
-            commentId = difference.path[0]
-            text = o.split('---')
-            switch difference.path[1]
-              when 'text' then text = [text[0], difference.rhs]
-              when 'date' then text[0] = text[0].replace /at \[[^]]*\]/, "at [#{difference.rhs}]"
-            trello.put "/1/actions/#{commentId}/text",
-              { text: '---'.join(text) }
-            , (err, data) ->
-              throw err if err
-              console.log 'comment updated successfully:', data
-              # TODO update target model
-
-        console.log 'all diffs applied'
-      console.log 'end of targets'
+                # TODO update source model
+                db.cards.update(
+                  { _id: source._id }
+                  { $set: { "comments.#{comment.sourceCommentId}.#{target._id}": data.id } }
+                ).catch((x) -> console.log x)
+            when 'update'
+              console.log 'updating comment'
+              db.cards.findOne(
+                { _id: source._id }
+                { "comments.#{comment.sourceCommentId}.#{target._id}": 1 }
+              ).then((c) ->
+                try
+                  c.comments[comment.sourceCommentId][target._id]
+                catch e
+                  console.log 'no comment found on source'
+                  throw e
+              ).then((targetCommentId) ->
+                trello.put "/1/actions/#{targetCommentId}/text",
+                  { value: mirroredCommentText comment, source._id }
+                , (err, data) ->
+                  console.log err if err
+                  console.log 'comment updated successfully:', data
+              )
+            when 'delete'
+              db.cards.findAndModify(
+                query: { _id: source._id }
+                fields: { "comments.#{comment.sourceCommentId}.#{target._id}": 1 }
+                update: { $unset: { "comments.#{comment.sourceCommentId}.#{target._id}": '' } }
+              ).then((c) ->
+                try
+                  c.comments[comment.sourceCommentId][target._id]
+                catch e
+                  console.log 'no comment found on source'
+                  throw e
+              ).then((targetCommentId) ->
+                trello.delete "/1/actions/#{targetCommentId}", (err, data) ->
+                  console.log err if err
+                  console.log 'comment deleted successfully:', data
+              )
     )
   response.send 'ok'
 
@@ -182,11 +191,9 @@ app.post '/webhooks/mirrored-card', (request, response) ->
   action = payload.action.type
   console.log 'webhook:', action
 
-  console.log JSON.stringify payload, null, 2
   cardId = payload.action.data.card.id
 
-  if payload.action.memberCreator.id == settings.TRELLO_BOT_ID
-    console.log 'webhook triggered by a bot action, ignore.'
+  comments = {}
 
   switch action # update the card model
     when 'updateCard'
@@ -205,26 +212,35 @@ app.post '/webhooks/mirrored-card', (request, response) ->
         { $set: set }
       )
     when 'commentCard'
-      comment =
-        id: payload.action.id
+      comments[payload.action.id] =
+        sourceCommentId: payload.action.id
+        kind: 'create'
         text: payload.action.data.text
         author:
           id: payload.action.memberCreator.id
           name: payload.action.memberCreator.username
         date: payload.action.date
+    when 'updateComment'
+      comments[payload.action.data.action.id] =
+        sourceCommentId: payload.action.data.action.id
+        kind: 'update'
+        text: payload.action.data.action.text
+        author:
+          id: payload.action.memberCreator.id
+          name: payload.action.memberCreator.username
+        date: payload.action.date
+    when 'deleteComment'
+      comments[payload.action.data.action.id] =
+        sourceCommentId: payload.action.data.action.id
+        kind: 'delete'
 
-      set = {}
-      set['comments.' + comment.id] = comment
+  if payload.action.memberCreator.id == settings.TRELLO_BOT_ID
+    return console.log 'webhook triggered by a bot action, don\'t apply mirror.'
 
-      db.cards.update(
-        { _id: cardId }
-        { $set: set }
-      )
-    when 'updateComment', 'deleteComment'
-      console.log 'x'
+  console.log JSON.stringify payload, null, 2
 
   # apply the update to its mirrored card
-  queueApplyMirror cardId
+  queueApplyMirror cardId, comments
 
   response.send 'ok'
 
@@ -233,11 +249,16 @@ app.listen port, '0.0.0.0', ->
   console.log 'running at 0.0.0.0:' + port
 
 # utils ~
-queueApplyMirror = (cardId) ->
+queueApplyMirror = (cardId, comments={}) ->
   applyMirrorURL = settings.SERVICE_URL + '/debounced/apply-mirror'
   data = {}
-  data[cardId] = true
+  data[cardId] = comments
   superagent.post('http://debouncer.websitesfortrello.com/debounce/15/' + applyMirrorURL)
             .set('Content-Type': 'application/json')
             .send(data)
             .end()
+
+mirroredCommentText = (comment, sourceCardId) ->
+  date = moment(comment.date).format('MMMM Do YYYY, h:mm:ssa UTC')
+  text = '>' + comment.text.replace /\n/, '\n>'
+  "[#{comment.author.name}](https://trello.com/#{comment.author.id}) at [#{date}](https://trello.com/c/#{sourceCardId}):\n\n#{text}"
