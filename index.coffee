@@ -39,6 +39,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
           }
           comments: {} # this is where we store the id of the target comments
                        # when the source comments are in this card.
+          attachments: {} # same as above
         }
 
         db.cards.update(
@@ -63,17 +64,20 @@ app.post '/webhooks/trello-bot', (request, response) ->
 
           # initial fetch ~
           console.log 'initial fetch'
-          # basic data (name, desc, due)
-          trello.get "/1/cards/#{card._id}", { fields: 'name,desc,due' }, (err, data) ->
+          # basic data (name, desc, due, idAttachmentCover)
+          # (don't fetch comments -- we only want comments from now on)
+          # (same for attachments)
+          trello.get "/1/cards/#{card._id}", {
+            fields: 'name,desc,due,idAttachmentCover'
+          }, (err, data) ->
             delete data.id
             db.cards.update(
-              {_id: card._id}
-              {$set: { data: data }}
+              { _id: card._id }
+              { $set: { data: data } }
             ).then(-> return cardId).then(queueApplyMirror)
-          # comments (don't fetch anything -- we only want comments from now on)
           # ~
 
-          # search for mirrored cards in the db (equal name, same user)
+          # search for mirrorable cards in the db (equal name, same user)
           console.log 'searching cards to mirror'
           db.cards.find(
             {
@@ -105,12 +109,12 @@ app.post '/webhooks/trello-bot', (request, response) ->
           {webhook: 1}
         ).then((wh) ->
           # remove webhook from this card
-          trello.delete '/1/webhooks/' + wh, (err) -> console.log err
+          trello.del '/1/webhooks/' + wh, (err) -> console.log err
 
           # return
           response.send 'ok'
 
-          # update db removing webhook id and card data (desc, name, comments, attachments, checklists)
+          # update db removing webhook id and card data (desc, name etc.)
           db.cards.update(
             {_id: payload.action.data.card.id}
             {$unset: {webhook: '', data: ''}}
@@ -119,71 +123,128 @@ app.post '/webhooks/trello-bot', (request, response) ->
 
 app.post '/debounced/apply-mirror', (request, response) ->
   console.log 'applying mirror for changes in', Object.keys request.body.merge
-  for cardId, comments of request.body.merge
-    # fetch both cards, updated and mirrored
-    db.cards.find({ $or: [ { _id: cardId }, { mirror: cardId } ] }).toArray().then((cards) ->
-      ids = (c._id for c in cards)
-      console.log 'found', ids, 'mirroring', cardId
 
-      source = (cards.splice (ids.indexOf cardId), 1)[0]
-      for target in cards
+  cards = request.body.merge
+  for id, payload of cards
+    (->
+      cardId = id
+      changes = payload
 
-        # name, due, desc
-        for difference in diff.diff(target.data, source.data) or []
-          console.log 'applying data diff', difference
-          if difference.kind == 'E' and difference.path.length == 1
-            trello.put "/1/cards/#{target._id}/#{difference.path[0]}", {value: difference.rhs}, (err) ->
+      # fetch both cards, updated and mirrored
+      db.cards.find({ $or: [ { _id: cardId }, { mirror: cardId } ] }).toArray().then((cards) ->
+        ids = (c._id for c in cards)
+        console.log 'found', ids, 'mirroring', cardId
+
+        source = (cards.splice (ids.indexOf cardId), 1)[0]
+        for target in cards
+
+          # name, due, desc, idAttachmentCover
+          console.log '-> mirroring data'
+          for difference in diff.diff(target.data, source.data) or []
+            console.log 'applying data diff', difference
+            if difference.kind == 'E' and difference.path.length == 1
+              value = difference.rhs
+
+              # if we are setting idAttachmentCover, get the corresponding attachment id of this card
+              # (since the one we have now is an id of an attachment of the source card, which cannot be the cover of this)
+              if difference.path[0] == 'idAttachmentCover'
+                console.log source.attachments
+                console.log value
+                console.log target._id
+                try
+                  value = source.attachments[value][target._id]
+                catch e
+                  console.log 'the desired cover image is not available here'
+                console.log 'new value:', value
+
+              trello.put "/1/cards/#{target._id}/#{difference.path[0]}", {value: difference.rhs}, (err) ->
+                console.log err if err
+
+          # comments
+          console.log '-> mirroring comments'
+          console.log '   create', changes.comments['create'].length
+          for comment in changes.comments['create']
+            trello.post "/1/cards/#{target._id}/actions/comments",
+              { text: mirroredCommentText comment, source._id }
+            , (err, data) ->
               console.log err if err
+              console.log 'comment created successfully:', data
+              # update source model
+              db.cards.update(
+                { _id: source._id }
+                { $set: { "comments.#{comment.sourceCommentId}.#{target._id}": data.id } }
+              ).then((x) -> console.log 'created comment added to source card on db:', x)
 
-        # comments
-        for comment in comments['create']
-          trello.post "/1/cards/#{target._id}/actions/comments",
-            { text: mirroredCommentText comment, source._id }
-          , (err, data) ->
-            console.log err if err
-            console.log 'comment created successfully:', data
-            # update source model
-            db.cards.update(
-              { _id: source._id }
-              { $set: { "comments.#{comment.sourceCommentId}.#{target._id}": data.id } }
-            ).catch((x) -> console.log x)
-
-        for comment in comments['update']
-          console.log 'updating comment'
-          db.cards.findOne(
-            { _id: source._id }
-            { "comments.#{comment.sourceCommentId}.#{target._id}": 1 }
-          ).then((c) ->
+          console.log '   update', changes.comments['update'].length
+          for comment in changes.comments['update']
+            console.log 'updating comment'
             try
-              c.comments[comment.sourceCommentId][target._id]
+              targetCommentId = source.comments[comment.sourceCommentId][target._id]
             catch e
-              console.log 'no comment found on source'
+              console.log 'no comment found on source:', JSON.stringify(source.comments)
               throw e
-          ).then((targetCommentId) ->
+
             trello.put "/1/actions/#{targetCommentId}/text",
               { value: mirroredCommentText comment, source._id }
             , (err, data) ->
               console.log err if err
               console.log 'comment updated successfully:', data
-          )
 
-        for comment in comments['delete']
-          db.cards.findAndModify(
-            query: { _id: source._id }
-            fields: { "comments.#{comment.sourceCommentId}.#{target._id}": 1 }
-            update: { $unset: { "comments.#{comment.sourceCommentId}.#{target._id}": '' } }
-          ).then((c) ->
+          console.log '   delete', changes.comments['delete'].length
+          for comment in changes.comments['delete']
             try
-              c.comments[comment.sourceCommentId][target._id]
+              targetCommentId = source.comments[comment.sourceCommentId][target._id]
             catch e
-              console.log 'no comment found on source'
+              console.log 'no comment found on source:', JSON.stringify(source.comments)
               throw e
-          ).then((targetCommentId) ->
-            trello.delete "/1/actions/#{targetCommentId}", (err, data) ->
+
+            console.log 'deleting comment', targetCommentId
+            trello.del "/1/actions/#{targetCommentId}", (err, data) ->
               console.log err if err
               console.log 'comment deleted successfully:', data
-          )
-    )
+              db.cards.update(
+                query: { _id: source._id }
+                update: { $unset: { "comments.#{comment.sourceCommentId}.#{target._id}": '' } }
+              )
+
+          # attachments
+          console.log '-> mirroring attachments'
+          console.log '   add', changes.attachments['add'].length
+          for attachment in changes.attachments['add']
+            console.log 'adding attachment', attachment.url
+            trello.post "/1/cards/#{target._id}/attachments",
+              { url: attachment.url, name: attachment.name }
+            , (err, data) ->
+              console.log err if err
+              console.log 'added successfully:', data
+              # update source and target model (unlike the case of comments, deleting attachments added by the bot also delete the original attachment)
+              db.cards.update(
+                { _id: source._id }
+                { $set: { "attachments.#{attachment.sourceAttachmentId}.#{target._id}": data.id } }
+              ).catch((x) -> console.log x)
+              db.cards.update(
+                { _id: target._id }
+                { $set: { "attachments.#{data.id}.#{source._id}": attachment.sourceAttachmentId } }
+              ).catch((x) -> console.log x)
+            
+          console.log '   delete', changes.attachments['delete'].length
+          for attachment in changes.attachments['delete']
+            try
+              targetAttachmentId = source.attachments[attachment.sourceAttachmentId][target._id]
+            catch e
+              console.log 'no attachment found on source:', JSON.stringify(source.attachments)
+              throw e
+
+            trello.del "/1/actions/#{targetAttachmentId}", (err, data) ->
+              console.log err if err
+              console.log 'attachment deleted successfully:', data
+              db.cards.update(
+                query: { _id: source._id }
+                update: { $unset: { "attachment.#{attachment.sourceAttachmentId}.#{target._id}": '' } }
+              )
+      )
+    )()
+
   response.send 'ok'
 
 app.post '/webhooks/mirrored-card', (request, response) ->
@@ -192,8 +253,8 @@ app.post '/webhooks/mirrored-card', (request, response) ->
   console.log 'webhook:', action
 
   cardId = payload.action.data.card.id
-
-  comments = {}
+  comments = {create: [], update: [], delete: []}
+  attachments = {add: [], delete: []}
 
   switch action # update the card model
     when 'updateCard'
@@ -230,8 +291,18 @@ app.post '/webhooks/mirrored-card', (request, response) ->
         date: payload.action.date
       ]
     when 'deleteComment'
-      comments['create'] = [
+      comments['delete'] = [
         sourceCommentId: payload.action.data.action.id
+      ]
+    when 'addAttachmentToCard'
+      attachments['add'] = [
+        sourceAttachmentId: payload.action.data.attachment.id
+        url: payload.action.data.attachment.url
+        name: payload.action.data.attachment.name
+      ]
+    when 'deleteAttachmentFromCard'
+      attachments['delete'] = [
+        sourceAttachmentId: payload.action.data.attachment.id
       ]
 
   if payload.action.memberCreator.id == settings.TRELLO_BOT_ID
@@ -240,7 +311,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
   console.log JSON.stringify payload, null, 2
 
   # apply the update to its mirrored card
-  queueApplyMirror cardId, comments
+  queueApplyMirror cardId, {comments: comments, attachments: attachments}
 
   response.send 'ok'
 
@@ -249,10 +320,10 @@ app.listen port, '0.0.0.0', ->
   console.log 'running at 0.0.0.0:' + port
 
 # utils ~
-queueApplyMirror = (cardId, comments={}) ->
+queueApplyMirror = (cardId, changes={comments: {create: [], update: [], delete: []}, attachments: {add: [], delete: []}}) ->
   applyMirrorURL = settings.SERVICE_URL + '/debounced/apply-mirror'
   data = {}
-  data[cardId] = comments
+  data[cardId] = changes
   superagent.post('http://debouncer.websitesfortrello.com/debounce/15/' + applyMirrorURL)
             .set('Content-Type': 'application/json')
             .send(data)
