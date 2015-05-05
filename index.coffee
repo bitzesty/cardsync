@@ -136,53 +136,53 @@ app.post '/debounced/apply-mirror', (request, response) ->
               console.log err if err
 
         # comments
-        for _, comment of comments
-          switch comment.kind
-            when 'create'
-              trello.post "/1/cards/#{target._id}/actions/comments",
-                { text: mirroredCommentText comment, source._id }
-              , (err, data) ->
-                console.log err if err
-                console.log 'comment created successfully:', data
-                # TODO update source model
-                db.cards.update(
-                  { _id: source._id }
-                  { $set: { "comments.#{comment.sourceCommentId}.#{target._id}": data.id } }
-                ).catch((x) -> console.log x)
-            when 'update'
-              console.log 'updating comment'
-              db.cards.findOne(
-                { _id: source._id }
-                { "comments.#{comment.sourceCommentId}.#{target._id}": 1 }
-              ).then((c) ->
-                try
-                  c.comments[comment.sourceCommentId][target._id]
-                catch e
-                  console.log 'no comment found on source'
-                  throw e
-              ).then((targetCommentId) ->
-                trello.put "/1/actions/#{targetCommentId}/text",
-                  { value: mirroredCommentText comment, source._id }
-                , (err, data) ->
-                  console.log err if err
-                  console.log 'comment updated successfully:', data
-              )
-            when 'delete'
-              db.cards.findAndModify(
-                query: { _id: source._id }
-                fields: { "comments.#{comment.sourceCommentId}.#{target._id}": 1 }
-                update: { $unset: { "comments.#{comment.sourceCommentId}.#{target._id}": '' } }
-              ).then((c) ->
-                try
-                  c.comments[comment.sourceCommentId][target._id]
-                catch e
-                  console.log 'no comment found on source'
-                  throw e
-              ).then((targetCommentId) ->
-                trello.delete "/1/actions/#{targetCommentId}", (err, data) ->
-                  console.log err if err
-                  console.log 'comment deleted successfully:', data
-              )
+        for comment in comments['create']
+          trello.post "/1/cards/#{target._id}/actions/comments",
+            { text: mirroredCommentText comment, source._id }
+          , (err, data) ->
+            console.log err if err
+            console.log 'comment created successfully:', data
+            # update source model
+            db.cards.update(
+              { _id: source._id }
+              { $set: { "comments.#{comment.sourceCommentId}.#{target._id}": data.id } }
+            ).catch((x) -> console.log x)
+
+        for comment in comments['update']
+          console.log 'updating comment'
+          db.cards.findOne(
+            { _id: source._id }
+            { "comments.#{comment.sourceCommentId}.#{target._id}": 1 }
+          ).then((c) ->
+            try
+              c.comments[comment.sourceCommentId][target._id]
+            catch e
+              console.log 'no comment found on source'
+              throw e
+          ).then((targetCommentId) ->
+            trello.put "/1/actions/#{targetCommentId}/text",
+              { value: mirroredCommentText comment, source._id }
+            , (err, data) ->
+              console.log err if err
+              console.log 'comment updated successfully:', data
+          )
+
+        for comment in comments['delete']
+          db.cards.findAndModify(
+            query: { _id: source._id }
+            fields: { "comments.#{comment.sourceCommentId}.#{target._id}": 1 }
+            update: { $unset: { "comments.#{comment.sourceCommentId}.#{target._id}": '' } }
+          ).then((c) ->
+            try
+              c.comments[comment.sourceCommentId][target._id]
+            catch e
+              console.log 'no comment found on source'
+              throw e
+          ).then((targetCommentId) ->
+            trello.delete "/1/actions/#{targetCommentId}", (err, data) ->
+              console.log err if err
+              console.log 'comment deleted successfully:', data
+          )
     )
   response.send 'ok'
 
@@ -212,27 +212,27 @@ app.post '/webhooks/mirrored-card', (request, response) ->
         { $set: set }
       )
     when 'commentCard'
-      comments[payload.action.id] =
+      comments['create'] = [
         sourceCommentId: payload.action.id
-        kind: 'create'
         text: payload.action.data.text
         author:
           id: payload.action.memberCreator.id
           name: payload.action.memberCreator.username
         date: payload.action.date
+      ]
     when 'updateComment'
-      comments[payload.action.data.action.id] =
+      comments['update'] = [
         sourceCommentId: payload.action.data.action.id
-        kind: 'update'
         text: payload.action.data.action.text
         author:
           id: payload.action.memberCreator.id
           name: payload.action.memberCreator.username
         date: payload.action.date
+      ]
     when 'deleteComment'
-      comments[payload.action.data.action.id] =
+      comments['create'] = [
         sourceCommentId: payload.action.data.action.id
-        kind: 'delete'
+      ]
 
   if payload.action.memberCreator.id == settings.TRELLO_BOT_ID
     return console.log 'webhook triggered by a bot action, don\'t apply mirror.'
