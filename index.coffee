@@ -1,7 +1,8 @@
 settings   = require './settings'
 
-util       = require 'util'
+jdp        = require 'jsondiffpatch'
 diff       = require 'deep-diff'
+xtend      = require 'xtend'
 moment     = require 'moment'
 express    = require 'express'
 superagent = require 'superagent'
@@ -13,6 +14,9 @@ db     = (require 'promised-mongo') settings.MONGO_URI, ['cards']
 app = express()
 app.use express.static(__dirname + '/static')
 app.use bodyParser.json()
+
+cldiff = jdp.create(objectHash: (o) -> o.name)
+log = (msg) -> (a, b) -> if b then console.log msg, a, b else console.log msg, a
 
 sendOk = (request, response) ->
   console.log 'trello checks this endpoint when creating a webhook'
@@ -37,6 +41,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
           data: {
             name: payload.action.data.card.name
           }
+          checklists: []
           comments: {} # this is where we store the id of the target comments
                        # when the source comments are in this card.
           attachments: {} # same as above
@@ -69,12 +74,20 @@ app.post '/webhooks/trello-bot', (request, response) ->
           # (same for attachments)
           trello.get "/1/cards/#{card._id}", {
             fields: 'name,desc,due,idAttachmentCover'
+            checkItemStates: 'true'
+            checkItemState_fields: 'idCheckItem,state'
+            checklists: 'all'
+            checklist_fields: 'name,pos'
           }, (err, data) ->
+            checklists = data.checklists
             delete data.id
+            delete data.checkItemStates
+            delete data.checklists
             db.cards.update(
               { _id: card._id }
-              { $set: { data: data } }
-            ).then(-> return cardId).then(queueApplyMirror)
+              { $set: { data: data }, $set: { checklists: checklists } }
+            ).then(queueApplyMirror.bind null, 'data', card.id)
+             .then(queueApplyMirror.bind null, 'checklists', card.id)
           # ~
 
           # search for mirrorable cards in the db (equal name, same user)
@@ -121,8 +134,8 @@ app.post '/webhooks/trello-bot', (request, response) ->
           )
         )
 
-app.post '/debounced/apply-mirror', (request, response) ->
-  console.log 'applying mirror for changes in', Object.keys request.body.merge
+app.post '/debounced/apply-mirror/data', (request, response) ->
+  console.log 'applying DATA mirror for changes in', Object.keys request.body.merge
 
   cards = request.body.merge
   for id, payload of cards
@@ -139,7 +152,6 @@ app.post '/debounced/apply-mirror', (request, response) ->
         for target in cards
 
           # name, due, desc, idAttachmentCover
-          console.log '-> mirroring data'
           for difference in diff.diff(target.data, source.data) or []
             console.log 'applying data diff', difference
             if difference.kind == 'E' and difference.path.length == 1
@@ -159,9 +171,116 @@ app.post '/debounced/apply-mirror', (request, response) ->
 
               trello.put "/1/cards/#{target._id}/#{difference.path[0]}", {value: difference.rhs}, (err) ->
                 console.log err if err
+      )
+    )()
+
+  response.send 'ok'
+
+app.post '/debounced/apply-mirror/checklists', (request, response) ->
+  console.log 'applying CHECKLISTS mirror for changes in', Object.keys request.body.merge
+
+  cards = request.body.merge
+  for id, payload of cards
+    (->
+      cardId = id
+      changes = payload
+
+      # fetch both cards, updated and mirrored
+      db.cards.find({ $or: [ { _id: cardId }, { mirror: cardId } ] }).toArray().then((cards) ->
+        ids = (c._id for c in cards)
+        console.log 'found', ids, 'mirroring', cardId
+
+        source = (cards.splice (ids.indexOf cardId), 1)[0]
+        for target in cards
+
+          # checklists
+          d = cldiff.diff target.checklists, source.checklists
+          console.log JSON.stringify d, null, 2
+          for k, list of d when k isnt '_t'
+            if k[0] == '_' # deleted or moved
+              if list[2] == 0
+                # checklist deleted
+                console.log 'will delete checklist', list[0]
+                trello.del "/1/checklists/#{list[0].id}", log "checklist deleted:"
+            else if Array.isArray list
+              # checklist added
+              console.log 'will add checklist', list[0]
+              (->
+                chklist = list
+                trello.post '/1/checklists', {
+                  name: chklist[0].name
+                  pos: chklist[0].pos
+                  idCard: target._id
+                }, (err, data) ->
+                  return console.log err if err
+                  for _, item of chklist[0].checkItems
+                    console.log 'checklist created'
+                    trello.post "/1/checklists/#{data.id}/checkItems", {
+                      name: item.name
+                      pos: item.pos
+                      checked: item.state is 'complete'
+                    }, log "checkitem added on newly created checklist"
+              )()
+            else if (list.pos or list.checkItems)
+              # checklist modified
+              if Array.isArray list.pos
+                trello.put "/1/checklists/#{list.id[0]}/pos", { value: list.pos[1] }, log 'changed checkitem position'
+              for ki, item of list.checkItems when ki isnt '_t'
+                if ki[0] == '_' # deleted or moved
+                  if item[2] == 0
+                    # checkitem deleted
+                    console.log 'will delete checkitem', item[0]
+                    trello.del(
+                      "/1/checklists/#{list.id[0]}/checkItems/#{item[0].id}"
+                      log 'checkitem deleted'
+                    )
+                else if Array.isArray item
+                  # checkitem added
+                  console.log 'will add checkitem'
+                  trello.post "/1/checklists/#{list.id[0]}/checkItems", {
+                    name: item[0].name
+                    pos: item[0].pos
+                    state: item[0].state is 'complete'
+                  }, log 'checkitem created'
+                else if (item.state or item.pos)
+                  # checkitem modified
+                  update = {}
+                  for prop in ['state', 'pos'] when item[prop]
+                    update[prop] = item[prop][1]
+                  continue if Object.keys(update) == 0
+
+                  console.log 'will update checkitem', item
+                  trello.put(
+                    "/1/cards/#{target._id}/checklist/#{list.id[0]}/checkItem/#{item.id[0]}"
+                    update
+                    log 'checkitem updated'
+                  )
+
+          # we're doing this for each target
+          queueRefetchChecklists target._id, {applyMirror: false}
+      )
+    )()
+
+  response.send 'ok'
+
+app.post '/debounced/apply-mirror/comments', (request, response) ->
+  console.log 'applying COMMENTS mirror for changes in', Object.keys request.body.merge
+
+  cards = request.body.merge
+  for id, payload of cards
+    (->
+      cardId = id
+      changes = payload
+
+      # fetch both cards, updated and mirrored
+      db.cards.find({ $or: [ { _id: cardId }, { mirror: cardId } ] }).toArray().then((cards) ->
+        ids = (c._id for c in cards)
+        console.log 'found', ids, 'mirroring', cardId
+
+        source = (cards.splice (ids.indexOf cardId), 1)[0]
+        for target in cards
 
           # comments
-          console.log '-> mirroring comments'
           console.log '   create', changes.comments['create'].length
           for comment in changes.comments['create']
             trello.post "/1/cards/#{target._id}/actions/comments",
@@ -206,9 +325,29 @@ app.post '/debounced/apply-mirror', (request, response) ->
                 query: { _id: source._id }
                 update: { $unset: { "comments.#{comment.sourceCommentId}.#{target._id}": '' } }
               )
+      )
+    )()
+
+  response.send 'ok'
+
+app.post '/debounced/apply-mirror/attachments', (request, response) ->
+  console.log 'applying ATTACHMENTS mirror for changes in', Object.keys request.body.merge
+
+  cards = request.body.merge
+  for id, payload of cards
+    (->
+      cardId = id
+      changes = payload
+
+      # fetch both cards, updated and mirrored
+      db.cards.find({ $or: [ { _id: cardId }, { mirror: cardId } ] }).toArray().then((cards) ->
+        ids = (c._id for c in cards)
+        console.log 'found', ids, 'mirroring', cardId
+
+        source = (cards.splice (ids.indexOf cardId), 1)[0]
+        for target in cards
 
           # attachments
-          console.log '-> mirroring attachments'
           console.log '   add', changes.attachments['add'].length
           for attachment in changes.attachments['add']
             console.log 'adding attachment', attachment.url
@@ -248,71 +387,112 @@ app.post '/debounced/apply-mirror', (request, response) ->
 
   response.send 'ok'
 
+app.post '/debounced/refetch-checklists', (request, response) ->
+  options = request.body.merge.options
+  delete request.body.merge.options
+
+  for id of request.body.merge
+    (->
+      cardId = id
+      if options and options[cardId]
+        applyMirror = options[cardId].applyMirror
+      else
+        applyMirror = false
+
+      console.log 'refetching checklists for', cardId
+
+      trello.get "/1/cards/#{cardId}", {
+        fields: 'id'
+        checkItemStates: 'true'
+        checkItemState_fields: 'idCheckItem,state'
+        checklists: 'all'
+        checklist_fields: 'name,pos'
+      }, (err, data) ->
+        db.cards.update(
+          { _id: cardId }
+          { $set: { checklists: data.checklists } }
+        ).then(->
+          if applyMirror
+            queueApplyMirror 'checklists', cardId
+        )
+    )()
+
 app.post '/webhooks/mirrored-card', (request, response) ->
   payload = request.body
   action = payload.action.type
   console.log 'webhook:', action
 
   cardId = payload.action.data.card.id
-  comments = {create: [], update: [], delete: []}
-  attachments = {add: [], delete: []}
 
-  switch action # update the card model
-    when 'updateCard'
-      updated = payload.action.data.card
-      delete updated.id
-      delete updated.listId
-      delete updated.idShort
-      delete updated.shortLink
+  if action == 'updateCard'
+    updated = payload.action.data.card
+    delete updated.id
+    delete updated.listId
+    delete updated.idShort
+    delete updated.shortLink
+    set = {}
+    for k, v of updated
+      set['data.' + k] = v
+    db.cards.update(
+      { _id: cardId }
+      { $set: set }
+    )
+    if payload.action.memberCreator.id == settings.TRELLO_BOT_ID
+      console.log 'webhook triggered by a bot action, don\'t apply mirror.'
+    else
+      queueApplyMirror 'data', cardId
 
-      set = {}
-      for k, v of updated
-        set['data.' + k] = v
+  else if action in ['addChecklistToCard', 'removeChecklistFromCard', 'updateChecklist', 'createCheckItem', 'deleteCheckItem', 'updateCheckItem', 'updateCheckItemStateOnCard']
+    if payload.action.memberCreator.id != settings.TRELLO_BOT_ID # ignore if updated by the bot
+      queueRefetchChecklists cardId, {applyMirror: true}
 
-      db.cards.update(
-        { _id: cardId }
-        { $set: set }
-      )
-    when 'commentCard'
-      comments['create'] = [
-        sourceCommentId: payload.action.id
-        text: payload.action.data.text
-        author:
-          id: payload.action.memberCreator.id
-          name: payload.action.memberCreator.username
-        date: payload.action.date
-      ]
-    when 'updateComment'
-      comments['update'] = [
-        sourceCommentId: payload.action.data.action.id
-        text: payload.action.data.action.text
-        author:
-          id: payload.action.memberCreator.id
-          name: payload.action.memberCreator.username
-        date: payload.action.date
-      ]
-    when 'deleteComment'
-      comments['delete'] = [
-        sourceCommentId: payload.action.data.action.id
-      ]
-    when 'addAttachmentToCard'
-      attachments['add'] = [
-        sourceAttachmentId: payload.action.data.attachment.id
-        url: payload.action.data.attachment.url
-        name: payload.action.data.attachment.name
-      ]
-    when 'deleteAttachmentFromCard'
-      attachments['delete'] = [
-        sourceAttachmentId: payload.action.data.attachment.id
-      ]
+  else if action in ['commentCard', 'updateComment', 'deleteComment']
+    comments = {}
+    switch action
+      when 'commentCard'
+        comments['create'] = [
+          sourceCommentId: payload.action.id
+          text: payload.action.data.text
+          author:
+            id: payload.action.memberCreator.id
+            name: payload.action.memberCreator.username
+          date: payload.action.date
+        ]
+      when 'updateComment'
+        comments['update'] = [
+          sourceCommentId: payload.action.data.action.id
+          text: payload.action.data.action.text
+          author:
+            id: payload.action.memberCreator.id
+            name: payload.action.memberCreator.username
+          date: payload.action.date
+        ]
+      when 'deleteComment'
+        comments['delete'] = [
+          sourceCommentId: payload.action.data.action.id
+        ]
+    if payload.action.memberCreator.id == settings.TRELLO_BOT_ID
+      console.log 'webhook triggered by a bot action, don\'t apply mirror.'
+    else
+      queueApplyMirror 'comments', cardId, {comments: comments}
 
-  if payload.action.memberCreator.id == settings.TRELLO_BOT_ID
-    return console.log 'webhook triggered by a bot action, don\'t apply mirror.'
-
-  console.log JSON.stringify payload, null, 2
-
-  # apply the update to its mirrored card
-  queueApplyMirror cardId, {comments: comments, attachments: attachments}
+  else if action in ['addAttachmentToCard', 'deleteAttachmentFromCard']
+    attachments {}
+    switch action
+      when 'addAttachmentToCard'
+        attachments['add'] = [
+          sourceAttachmentId: payload.action.data.attachment.id
+          url: payload.action.data.attachment.url
+          name: payload.action.data.attachment.name
+        ]
+      when 'deleteAttachmentFromCard'
+        attachments['delete'] = [
+          sourceAttachmentId: payload.action.data.attachment.id
+        ]
+    if payload.action.memberCreator.id == settings.TRELLO_BOT_ID
+      console.log 'webhook triggered by a bot action, don\'t apply mirror.'
+    else
+      queueApplyMirror 'attachments', cardId, {attachments: attachments}
 
   response.send 'ok'
 
@@ -321,11 +501,27 @@ app.listen port, '0.0.0.0', ->
   console.log 'running at 0.0.0.0:' + port
 
 # utils ~
-queueApplyMirror = (cardId, changes={comments: {create: [], update: [], delete: []}, attachments: {add: [], delete: []}}) ->
-  applyMirrorURL = settings.SERVICE_URL + '/debounced/apply-mirror'
+queueApplyMirror = (kind, cardId, changes={}) ->
+  changes = xtend(
+    { comments: {create: [], update: [], delete: []}, attachments: {add: [], delete: []} }
+    changes
+  )
+
+  applyMirrorURL = settings.SERVICE_URL + '/debounced/apply-mirror/' + kind
   data = {}
   data[cardId] = changes
-  superagent.post('http://debouncer.websitesfortrello.com/debounce/15/' + applyMirrorURL)
+  superagent.post('http://debouncer.websitesfortrello.com/debounce/13/' + applyMirrorURL)
+            .set('Content-Type': 'application/json')
+            .send(data)
+            .end()
+
+queueRefetchChecklists = (cardId, options={applyMirror: false}) ->
+  refetchChecklistsURL = settings.SERVICE_URL + '/debounced/refetch-checklists'
+  data = {}
+  data[cardId] = true
+  data.options = {}
+  data.options[cardId] = options
+  superagent.post('http://debouncer.websitesfortrello.com/debounce/9/' + refetchChecklistsURL)
             .set('Content-Type': 'application/json')
             .send(data)
             .end()
