@@ -235,7 +235,8 @@ app.post '/debounced/apply-mirror', (request, response) ->
               console.log 'no attachment found on source:', JSON.stringify(source.attachments)
               throw e
 
-            trello.del "/1/actions/#{targetAttachmentId}", (err, data) ->
+            console.log 'deleting attachment', targetAttachmentId
+            trello.del "/1/cards/#{target._id}/attachments/#{targetAttachmentId}", (err, data) ->
               console.log err if err
               console.log 'attachment deleted successfully:', data
               db.cards.update(
