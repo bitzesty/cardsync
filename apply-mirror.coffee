@@ -7,6 +7,7 @@ bodyParser = require 'body-parser'
 {trello, db,
  queueApplyMirror,
  queueRefetchChecklists,
+ mirroredCommentText,
  log} = require './setup'
 
 cldiff = jdp.create(objectHash: (o) -> o.name)
@@ -33,16 +34,13 @@ app.post '/data', (request, response) ->
             # if we are setting idAttachmentCover, get the corresponding attachment id of this card
             # (since the one we have now is an id of an attachment of the source card, which cannot be the cover of this)
             if difference.path[0] == 'idAttachmentCover' and difference.rhs
-              console.log source.attachments
-              console.log value
-              console.log target._id
               try
                 value = source.attachments[value][target._id]
               catch e
                 console.log 'the desired cover image is not available here'
-              console.log 'new value:', value
+              console.log 'new idAttachmentCover value:', value
 
-            trello.put "/1/cards/#{target._id}/#{difference.path[0]}", {value: difference.rhs}, (err) ->
+            trello.put "/1/cards/#{target._id}/#{difference.path[0]}", {value: value}, (err) ->
               console.log err if err
     )()
 
@@ -191,9 +189,11 @@ app.post '/attachments', (request, response) ->
     (->
       cardId = id
       changes = payload
+      console.dir changes
 
       eachTargetForSource cardId, (source, target) ->
         console.log '   add', changes.attachments['add'].length
+
         for attachment in changes.attachments['add']
           console.log 'adding attachment', attachment.url
           trello.post "/1/cards/#{target._id}/attachments",
@@ -217,7 +217,7 @@ app.post '/attachments', (request, response) ->
             targetAttachmentId = source.attachments[attachment.sourceAttachmentId][target._id]
           catch e
             console.log 'no attachment found on source:', JSON.stringify(source.attachments)
-            throw e
+            return
 
           console.log 'deleting attachment', targetAttachmentId
           trello.del "/1/cards/#{target._id}/attachments/#{targetAttachmentId}", (err, data) ->

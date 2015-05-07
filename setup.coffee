@@ -1,7 +1,8 @@
 settings   = require './settings'
 
 superagent = require 'superagent'
-xtend      = require 'xtend'
+extend     = require 'deep-extend'
+moment     = require 'moment'
 NodeTrello = require 'node-trello'
 PMongo     = require 'promised-mongo'
 
@@ -14,8 +15,11 @@ module.exports.log = (msg) -> (a, b) ->
   return a
 
 module.exports.queueApplyMirror = (kind, cardId, changes={}) ->
-  changes = xtend(
-    { comments: {create: [], update: [], delete: []}, attachments: {add: [], delete: []} }
+  changes = extend(
+    {
+      comments: {create: [], update: [], delete: []},
+      attachments: {add: [], delete: []}
+    }
     changes
   )
 
