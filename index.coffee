@@ -5,7 +5,8 @@ bodyParser = require 'body-parser'
 
 {trello, db,
  queueApplyMirror,
- queueRefetchChecklists} = require './setup'
+ queueRefetchChecklists,
+ log} = require './setup'
 
 app = express()
 app.use express.static(__dirname + '/static')
