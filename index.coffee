@@ -16,7 +16,9 @@ app.use express.static(__dirname + '/static')
 app.use bodyParser.json()
 
 cldiff = jdp.create(objectHash: (o) -> o.name)
-log = (msg) -> (a, b) -> if b then console.log msg, a, b else console.log msg, a
+log = (msg) -> (a, b) ->
+  if b then console.log msg, a, b else console.log msg, a
+  return a
 
 sendOk = (request, response) ->
   console.log 'trello checks this endpoint when creating a webhook'
@@ -27,10 +29,10 @@ app.get '/webhooks/mirrored-card', sendOk
 app.post '/webhooks/trello-bot', (request, response) ->
     payload = request.body
     action = payload.action.type
-    console.log 'bot webhook:', action
 
     switch action
       when 'addMemberToCard'
+        console.log 'bot webhook:', action
         # fetch/create this card
         card = {
           _id: payload.action.data.card.id
@@ -40,6 +42,9 @@ app.post '/webhooks/trello-bot', (request, response) ->
           mirror: []
           data: {
             name: payload.action.data.card.name
+            desc: null
+            due: null
+            idAttachmentCover: null
           }
           checklists: []
           comments: {} # this is where we store the id of the target comments
@@ -48,10 +53,10 @@ app.post '/webhooks/trello-bot', (request, response) ->
         }
 
         db.cards.update(
-          {_id: card._id}
+          { _id: card._id }
           card
-          {upsert: true}
-        ).then((r) ->
+          { upsert: true }
+        ).catch(log 'couldnt create card').then((r) ->
           # return
           response.send 'ok'
           
@@ -86,8 +91,25 @@ app.post '/webhooks/trello-bot', (request, response) ->
             db.cards.update(
               { _id: card._id }
               { $set: { data: data }, $set: { checklists: checklists } }
-            ).then(queueApplyMirror.bind null, 'data', card.id)
-             .then(queueApplyMirror.bind null, 'checklists', card.id)
+            )
+            .then(->
+              # get the first card of the mirror process (the master)       
+              db.cards.find(
+                {
+                  $or: [ { _id: card._id }, { mirror: card._id } ]
+                  webhook: { $exists: true }
+                }
+                { id: 1 }
+              ).sort(
+                { start: 1 }
+              ).limit(1).toArray()
+            )
+            .then((cards) -> cards[0])
+            .then(log 'found the master:')
+            .then((master) ->
+              queueApplyMirror('data', master._id)
+              queueApplyMirror('checklists', master._id)
+            )
           # ~
 
           # search for mirrorable cards in the db (equal name, same user)
@@ -117,21 +139,18 @@ app.post '/webhooks/trello-bot', (request, response) ->
         )
 
       when 'removeMemberFromCard'
-        db.cards.findOne(
-          {_id: payload.action.data.card.id}
-          {webhook: 1}
-        ).then((wh) ->
+        console.log 'bot webhook:', action
+        db.cards.update(
+          query: {_id: payload.action.data.card.id }
+          update: { $unset: {webhook: '', data: ''} }
+        ).then(->
           # remove webhook from this card
-          trello.del '/1/webhooks/' + wh, (err) -> console.log err
+          # trello.del '/1/webhooks/' + card.webhook, log 'deleted webhook'
+          # do not remove. trello doesn't duplicate webhooks.
+          # there's always 1 model-webhook to 1 token
 
           # return
           response.send 'ok'
-
-          # update db removing webhook id and card data (desc, name etc.)
-          db.cards.update(
-            {_id: payload.action.data.card.id}
-            {$unset: {webhook: '', data: ''}}
-          )
         )
 
 app.post '/debounced/apply-mirror/data', (request, response) ->
@@ -144,22 +163,28 @@ app.post '/debounced/apply-mirror/data', (request, response) ->
       changes = payload
 
       # fetch both cards, updated and mirrored
-      db.cards.find({ $or: [ { _id: cardId }, { mirror: cardId } ] }).toArray().then((cards) ->
+      db.cards.find(
+        {
+          $or: [ { _id: cardId }, { mirror: cardId } ]
+          webhook: { $exists: true }
+        }
+      ).toArray().then((cards) ->
         ids = (c._id for c in cards)
         console.log 'found', ids, 'mirroring', cardId
 
         source = (cards.splice (ids.indexOf cardId), 1)[0]
+        console.log 'SOURCE:', source._id
         for target in cards
 
           # name, due, desc, idAttachmentCover
           for difference in diff.diff(target.data, source.data) or []
             console.log 'applying data diff', difference
-            if difference.kind == 'E' and difference.path.length == 1
+            if difference.kind in ['E', 'N'] and difference.path.length == 1
               value = difference.rhs
 
               # if we are setting idAttachmentCover, get the corresponding attachment id of this card
               # (since the one we have now is an id of an attachment of the source card, which cannot be the cover of this)
-              if difference.path[0] == 'idAttachmentCover'
+              if difference.path[0] == 'idAttachmentCover' and difference.rhs
                 console.log source.attachments
                 console.log value
                 console.log target._id
@@ -477,7 +502,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
       queueApplyMirror 'comments', cardId, {comments: comments}
 
   else if action in ['addAttachmentToCard', 'deleteAttachmentFromCard']
-    attachments {}
+    attachments = {}
     switch action
       when 'addAttachmentToCard'
         attachments['add'] = [
@@ -506,6 +531,8 @@ queueApplyMirror = (kind, cardId, changes={}) ->
     { comments: {create: [], update: [], delete: []}, attachments: {add: [], delete: []} }
     changes
   )
+
+  console.log '... queueing', kind,'mirror process for', cardId, 'with:', JSON.stringify changes
 
   applyMirrorURL = settings.SERVICE_URL + '/debounced/apply-mirror/' + kind
   data = {}
