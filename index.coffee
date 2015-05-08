@@ -145,6 +145,8 @@ app.post '/webhooks/trello-bot', (request, response) ->
           response.send 'ok'
         )
 
+      else response.send 'no, thank you'
+
 app.post '/webhooks/mirrored-card', (request, response) ->
   payload = request.body
   action = payload.action.type

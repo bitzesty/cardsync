@@ -11,7 +11,7 @@ module.exports.db     = PMongo settings.MONGO_URI, ['cards']
 
 # utils ~
 module.exports.log = (msg) -> (a, b) ->
-  if b then console.log msg, a, b else console.log msg, a
+  if b then console.info msg, b else console.error msg, a
   return a
 
 module.exports.queueApplyMirror = (kind, cardId, changes={}) ->

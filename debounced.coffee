@@ -19,7 +19,7 @@ app.post '/refetch-checklists', (request, response) ->
       else
         applyMirror = false
 
-      console.log 'refetching checklists for', cardId
+      console.log '-> refetching checklists for', cardId
 
       trello.get "/1/cards/#{cardId}", {
         fields: 'id'
@@ -36,5 +36,7 @@ app.post '/refetch-checklists', (request, response) ->
             queueApplyMirror 'checklists', cardId
         )
     )()
+
+  response.send 'ok'
 
 module.exports = app

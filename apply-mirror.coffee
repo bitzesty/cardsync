@@ -16,7 +16,7 @@ app = express()
 app.use bodyParser.json()
 
 app.post '/data', (request, response) ->
-  console.log 'applying DATA mirror for changes in', Object.keys request.body.merge
+  console.log '-> applying DATA mirror for changes in', Object.keys request.body.merge
 
   cards = request.body.merge
   for id, payload of cards
@@ -27,7 +27,7 @@ app.post '/data', (request, response) ->
       eachTargetForSource cardId, (source, target) ->
         # name, due, desc, idAttachmentCover
         for difference in diff.diff(target.data, source.data) or []
-          console.log 'applying data diff', difference
+          console.log '   applying data diff', difference
           if difference.kind in ['E', 'N'] and difference.path.length == 1
             value = difference.rhs
 
@@ -47,7 +47,7 @@ app.post '/data', (request, response) ->
   response.send 'ok'
 
 app.post '/checklists', (request, response) ->
-  console.log 'applying CHECKLISTS mirror for changes in', Object.keys request.body.merge
+  console.log '-> applying CHECKLISTS mirror for changes in', Object.keys request.body.merge
 
   cards = request.body.merge
   for id, payload of cards
@@ -124,7 +124,7 @@ app.post '/checklists', (request, response) ->
   response.send 'ok'
 
 app.post '/comments', (request, response) ->
-  console.log 'applying COMMENTS mirror for changes in', Object.keys request.body.merge
+  console.log '-> applying COMMENTS mirror for changes in', Object.keys request.body.merge
 
   cards = request.body.merge
   for id, payload of cards
@@ -182,7 +182,7 @@ app.post '/comments', (request, response) ->
   response.send 'ok'
 
 app.post '/attachments', (request, response) ->
-  console.log 'applying ATTACHMENTS mirror for changes in', Object.keys request.body.merge
+  console.log '-> applying ATTACHMENTS mirror for changes in', Object.keys request.body.merge
 
   cards = request.body.merge
   for id, payload of cards
