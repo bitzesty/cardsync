@@ -1,5 +1,6 @@
 settings   = require './settings'
 
+swig       = require 'swig'
 express    = require 'express'
 bodyParser = require 'body-parser'
 
@@ -9,7 +10,7 @@ bodyParser = require 'body-parser'
  log} = require './setup'
 
 app = express()
-app.use express.static(__dirname + '/static')
+app.use '/static', express.static('static')
 app.use bodyParser.json()
 
 sendOk = (request, response) ->
@@ -228,6 +229,10 @@ app.post '/webhooks/mirrored-card', (request, response) ->
 
 app.use '/debounced', require './debounced'
 app.use '/debounced/apply-mirror', require './apply-mirror'
+
+index = swig.compileFile __dirname + '/templates/index.html'
+app.get '/', (request, response) ->
+  response.send index {config: settings, request: request}
 
 port = process.env.PORT or 5000
 app.listen port, '0.0.0.0', ->

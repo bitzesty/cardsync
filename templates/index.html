@@ -1,9 +1,29 @@
-{% extends 'base.html' %}
+<!doctype html>
+<html>
 
-{% block body %}
-<div class="row section" id="header">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sync Trello Cards across Boards</title>
+  <meta name="description" content="">
+  <link rel="stylesheet" href="/static/site.css">
+  <link rel="shortcut icon" href="/static/bluemirror-s.png">
+  <script>
+  (function(t,r,a,c,k){k=r.createElement('script');k.type='text/javascript';
+  k.async=true;k.src=a;k.id='ma';r.getElementsByTagName('head')[0].appendChild(k);
+  t.maq=[];t.mai=c;t.ma=function(){t.maq.push(arguments)};
+  })(window,document,'http://spooner.alhur.es:5984/microanalytics/_design/microanalytics/_rewrite/tracker.js','84ara6we');
+  
+  ma('pageView');
+  </script>
+</head>
+
+<body>
+
+<div class="row section grey" id="header">
   <div class="container" id="title">
-    <img src="/static/logo.png" class="center animate dropIn">
+    <img src="/static/bluemirror-m.png" class="center animate dropIn">
     <h1 class="center caps">{{ config.SERVICE_NAME }}</h1>
   </div>
   <div class="container">
@@ -26,7 +46,7 @@
   </div>
   <div class="container block">
     <div class="col-1-1">
-      <p>Or you can just, in all cases, simply go to <span class="code">{{ request.url_root }}{{ '<card id or shortlink>' }}</span> or <span class="code">{{ request.url_root }}{{ '<full card url>' }}</span> to authorize and get a link to your Card.</p>
+
     </div>
   </div>
 </div>
@@ -51,9 +71,10 @@
       <a href="{{config.SERVICE_URL}}">{{config.SERVICE_NAME}}</a> is not affiliated, sponsored or endorsed in any way by <a href="https://trello.com/">Trello</a>.
     </p>
     <p class="footer center">
-      Logo by <a href="http://thenounproject.com/niftyacres/">Stephen JB Thomas</a> at <a href="http://thenounproject.com/term/card/17310/">The Noun Project</a>.
     </p>
   </div>
 </div>
-{% endblock %}
 
+</body>
+
+</html>

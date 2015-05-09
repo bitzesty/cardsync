@@ -2262,9 +2262,9 @@ a {
   background-color: transparent;
   color: #F7F0FA; }
   .alert-box.error {
-    border-color: #0C3953;
+    border-color: wheat;
     background-color: transparent;
-    color: #0C3953; }
+    color: wheat; }
   .alert-box.success {
     border-color: #F7F0FA;
     background-color: transparent;
@@ -2288,8 +2288,8 @@ a.alert-box:hover {
   border-color: #EFB3AB; }
 
 a.alert-box.error:hover {
-  color: #0C3953;
-  border-color: #0C3953; }
+  color: wheat;
+  border-color: wheat; }
 
 a.alert-box.success:hover {
   color: #F7F0FA;
@@ -2299,6 +2299,8 @@ html {
   height: 100%; }
 
 body {
+  background: #0079BF;
+  color: white;
   min-height: 100%; }
 
 body#card {
@@ -2336,7 +2338,7 @@ body#card {
   #header .success i {
     color: #F7F0FA; }
   #header .error i {
-    color: #0C3953; }
+    color: wheat; }
   #header .done {
     opacity: 0.3; }
     #header .done p {

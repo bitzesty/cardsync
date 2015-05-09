@@ -5,7 +5,7 @@ $dark-blue: #E65845;
 $accent-blue: #EFB3AB;
 $accent: #ddd;
 
-$red: #0C3953;
+$red: wheat;
 
 @import 'normalize.scss';
 @import 'grid.scss';
@@ -14,11 +14,12 @@ $red: #0C3953;
 @import 'ionicons.min.scss';
 @import 'alertbox.scss';
 
-
 html {
     height: 100%;
 }
 body {
+    background: #0079BF;
+    color: white;
     min-height: 100%;
 }
 
