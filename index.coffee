@@ -133,15 +133,14 @@ app.post '/webhooks/trello-bot', (request, response) ->
 
       when 'removeMemberFromCard'
         console.log 'bot webhook:', action
-        db.cards.update(
+        # remove webhook from this card
+        db.cards.findAndModify(
           query: {_id: payload.action.data.card.id }
           update: { $unset: {webhook: '', data: ''} }
+          fields: { webhook: 1 }
+          new: false
         ).then(->
-          # remove webhook from this card
-          # trello.del '/1/webhooks/' + card.webhook, log 'deleted webhook'
-          # do not remove. trello doesn't duplicate webhooks.
-          # there's always 1 model-webhook to 1 token
-
+          trello.del '/1/webhooks/' + card.webhook, log 'deleted webhook'
           # return
           response.send 'ok'
         )
