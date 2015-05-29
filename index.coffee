@@ -106,7 +106,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
           # ~
 
           # search for mirrorable cards in the db (equal name, same user)
-          console.log 'searching cards to mirror'
+          console.log 'searching for cards to mirror'
           db.cards.find(
             {
               'data.name': card.data.name
@@ -114,7 +114,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
               '_id': { $ne: card._id }
               'webhook': { $exists: true }
             }
-            {_id: 1}
+            { _id: 1 }
           ).toArray().then((mrs) -> return (m._id for m in mrs)).then((mids) ->
             console.log card._id, 'found cards to mirror:', mids
 
@@ -140,7 +140,16 @@ app.post '/webhooks/trello-bot', (request, response) ->
           fields: { webhook: 1 }
           new: false
         ).then(->
+          # delete webhook from trello
           trello.del '/1/webhooks/' + card.webhook, log 'deleted webhook'
+
+          # remove this card from others which may be mirroring it
+          db.cards.update(
+            { mirror: payload.action.data.card.id }
+            { $pull: { mirror: payload.action.data.card.id } }
+            { multi: true }
+          )
+
           # return
           response.send 'ok'
         )
