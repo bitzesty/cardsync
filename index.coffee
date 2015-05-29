@@ -115,7 +115,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
               'webhook': { $exists: true }
             }
             { _id: 1 }
-          ).toArray().then((mrs) -> return (m._id for m in mrs)).then((mids) ->
+          ).toArray().then((mrs) -> (m._id for m in mrs)).then((mids) ->
             console.log card._id, 'found cards to mirror:', mids
 
             db.cards.update(
@@ -166,8 +166,10 @@ app.post '/webhooks/mirrored-card', (request, response) ->
   if action == 'updateCard'
     updated = payload.action.data.card
     delete updated.id
-    delete updated.listId
+    delete updated.idList
     delete updated.idShort
+    delete updated.pos
+    delete updated.closed
     delete updated.shortLink
     set = {}
     for k, v of updated
