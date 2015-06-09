@@ -1,0 +1,9 @@
+venv
+.env
+*.pyc
+*.pyo
+*.swp
+*.swo
+.sass-cache
+node_modules
+*.js
