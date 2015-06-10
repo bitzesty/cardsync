@@ -40,14 +40,17 @@ app.post '/webhooks/trello-bot', (request, response) ->
         Neo.execute '''
           MERGE (card:Card {shortLink: {SL}})
           SET card.webhook = {WH}
+          SET card.name = {NAME}
           MERGE (user:User {id: {USERID}})
           MERGE (user)-[:CONTROLS]->(card)
           WITH user, card
           MATCH (user)-[:CONTROLS]->(others:Card)
-            WHERE NOT others.shortLink = {SL}
+            WHERE NOT others.shortLink = {SL} AND
+                  others.name = card.name
           MERGE (card)-[:MIRRORS]->(others)
         ''',
           SL: payload.action.data.card.shortLink
+          NAME: payload.action.data.card.name
           WH: data.id
           USERID: payload.action.memberCreator.id
       ).then( ->
@@ -124,8 +127,17 @@ app.post '/webhooks/mirrored-card', (request, response) ->
       when "updateCard"
         changed = Object.keys(data.old)[0]
         if changed in ['name', 'due', 'desc']
-          Trello.putAsync "/1/cards/#{target}/#{changed}"
+          Trello.putAsync("/1/cards/#{target}/#{changed}"
           , value: data.card[changed]
+          ).then(->
+            if changed == 'name'
+              Neo.execute '''
+                MATCH (card:Card {shortLink: {SL}})
+                SET card.name = {NAME}
+              ''',
+                SL: data.card.shortLink
+                NAME: data.card[changed]
+          )
         else if changed =='idAttachmentCover'
           Promise.resolve().then(->
             if not data.card.idAttachmentCover
