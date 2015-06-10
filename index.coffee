@@ -57,16 +57,13 @@ app.post '/webhooks/trello-bot', (request, response) ->
         console.log 'card added to db'
       ).catch(console.log.bind console)
 
-    when 'removeMemberFromCard', 'deleteCard'
+    when 'removeMemberFromCard'
       Promise.resolve().then(->
-        Trello.getAsync '/1/cards/' + payload.action.data.card.id
-        , fields: 'shortLink'
-      ).then((card) ->
         Neo.execute '''
           MATCH (card:Card {shortLink: {SL}})
           RETURN card
         '''
-        , SL: card.shortLink
+        , SL: data.card.shortLink
       ).then((res) ->
         card = res[0]['card']
         Trello.delAsync '/1/webhooks/' + card.webhook
@@ -74,10 +71,10 @@ app.post '/webhooks/trello-bot', (request, response) ->
         console.log 'webhook deleted'
 
         Neo.execute '''
-          MATCH (card:Card {shortLink: {ID}})-[rel]-()
+          MATCH (card:Card {shortLink: {SL})-[rel]-()
           DELETE rel, card
         ''',
-          ID: payload.action.data.card.shortLink
+          SL: payload.action.data.card.shortLink
       ).then(->
         console.log 'card deleted from db'
       ).catch(console.log.bind console)
@@ -109,6 +106,14 @@ app.post '/webhooks/mirrored-card', (request, response) ->
     "updateCheckItemStateOnCard"
     "updateComment"
   ]
+    return
+
+  if action.type == "deleteCard"
+    Neo.execute '''
+      MATCH (card:Card {shortLink: {SL}})-[rel]-()
+      DELETE rel, card
+    ''',
+      SL: payload.model.shortUrl.split('/')[4]
     return
 
   Promise.resolve().then(->
