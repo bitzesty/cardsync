@@ -272,13 +272,112 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             SAID: data.attachment.id
             TAID: targetAttachmentId
         )
-      #when "addChecklistToCard"
-      #when "createCheckItem"
-      #when "updateCheckItem"
-      #when "updateCheckItemStateOnCard"
-      #when "deleteCheckItem"
-      #when "removeChecklistFromCard"
+      when "addChecklistToCard"
+        Promise.resolve().then(->
+          Trello.postAsync "/1/cards/#{target}/checklists"
+          , name: data.checklist.name
+        ).then((newChecklist) ->
+          Neo.execute '''
+            MATCH (source:Card {shortLink: {SRC}})
+            MATCH (target:Card {shortLink: {TGT}})
+            MERGE (source)-[:HAS]->(scl:Checklist {id: {SCLID}})
+            MERGE (target)-[:HAS]->(tcl:Checklist {id: {TCLID}})
+            MERGE (scl)-[:LINKED_TO]->(tcl)
+          ''',
+            SRC: data.card.shortLink
+            TGT: target
+            SCLID: data.checklist.id
+            TCLID: newChecklist.id
+        )
+      when "removeChecklistFromCard"
+        Promise.resolve().then(->
+          Neo.execute '''
+            MATCH (target:Card {shortLink: {TGT}})
+            MATCH (scl:Checklist {id: {SCLID}})
+            MATCH (scl)-[:LINKED_TO]-(taclChecklist)<-[:HAS]-(target)
+            RETURN tcl
+          ''',
+            SRC: data.card.shortLink
+            TGT: target
+            SCLID: data.checklist.id
+        ).then((res) ->
+          return res[0]['tcl'].id
+        ).then((targetChecklistId) ->
+          Trello.delAsync "/1/cards/#{target}/checklists/#{targetChecklistId}"
+          Neo.execute '''
+            MATCH (scl {id: {SCLID}})-[srel]-()
+            MATCH (tcl {id: {TCLID}})-[trel]-()
+            DELETE srel, trel, scl, tcl
+          ''',
+            SCLID: data.checklist.id
+            TCLID: targetChecklistId
+        )
+      when "createCheckItem"
+        Promise.resolve().then(->
+          Neo.execute '''
+            MATCH (target:Card {shortLink: {TGT}})
+            MATCH (scl:Checklist {id: {SCLID}})
+            MATCH (scl)-[:LINKED_TO]-(taclChecklist)<-[:HAS]-(target)
+            RETURN tcl
+          ''',
+            SRC: data.card.shortLink
+            TGT: target
+            SCLID: data.checklist
+        ).then((res) ->
+          targetChecklistId = res[0]['tcl'].id
+        ).then((targetCheckListId) ->
+          Trello.postAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem"
+          , name: data.checkItem.name
+        ).then((newCheckItem) ->
+          Neo.execute '''
+            MATCH (scl:Checklist {id: {SCLID}})
+            MATCH (tcl:Checklist {id: {TCLID}})
+            MERGE (scl)-[:CONTAINS]->(sci:CheckItem {id: {SCIID}})
+            MERGE (scl)-[:CONTAINS]->(tci:CheckItem {id: {TCIID}})
+            MERGE (sci)-[:LINKED_TO]->(tci)
+          ''',
+            SCLID: data.checklist.id
+            TCLID: targetChecklistId
+            SCIID: data.checkItem.id
+            TCIID: newCheckItem.id
+        )
+      when "updateCheckItem", "updateCheckItemStateOnCard", "deleteCheckItem"
+        checkids = Promise.resolve().then(->
+          Neo.execute '''
+            MATCH (target:Card {id: {TGT}})
+            MATCH (tcl:Checklist)<-[:HAS]-(target)
+            MATCH (sci:CheckItem {id: {SCIID}})
+            MATCH (tcl)-[:CONTAINS]->(tci:CheckItem)-[:LINKED_TO]-(sci)
+            RETURN tcl, tci
+          ''',
+            SCIID: data.checkItem.id
+            TGT: target
+        ).then((res) ->
+          return [res[0]['tcl'].id, res[0]['tci'].id]
+        )
 
+        switch payload.action.type
+          when "updateCheckItem"
+            checkids.spread((targetChecklistId, targetCheckItemId) ->
+              Trello.putAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem/#{targetCheckItemId}/name"
+              , value: data.checkItem.name
+            )
+          when "updateCheckItemStateOnCard"
+            checkids.spread((targetChecklistId, targetCheckItemId) ->
+              Trello.putAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem/#{targetCheckItemId}/state"
+              , value: data.checkItem.state
+            )
+          when "deleteCheckItem"
+            checkids.spread((targetChecklistId, targetCheckItemId) ->
+              Trello.delAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem/#{targetCheckItemId}"
+              Neo.execute '''
+                MATCH (tci:CheckItem {id: {TCIID}})-[trel]-()
+                MATCH (sci:CheckItem {id: {SCIID}})-[srel]-()
+                DELETE trel, srel, tci, sci
+              ''',
+                SCIID: data.checkItem.id
+                TCIID: targetCheckItemId
+            )
   ).then(->
     console.log '> everything done.'
   ).catch(console.log.bind console)
