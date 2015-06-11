@@ -63,7 +63,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
           MATCH (card:Card {shortLink: {SL}})
           RETURN card
         '''
-        , SL: data.card.shortLink
+        , SL: payload.action.data.card.shortLink
       ).then((res) ->
         card = res[0]['card']
         Trello.delAsync '/1/webhooks/' + card.webhook
@@ -71,7 +71,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
         console.log 'webhook deleted'
 
         Neo.execute '''
-          MATCH (card:Card {shortLink: {SL})-[rel]-()
+          MATCH (card:Card {shortLink: {SL}})-[rel]-()
           DELETE rel, card
         ''',
           SL: payload.action.data.card.shortLink
