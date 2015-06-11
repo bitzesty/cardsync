@@ -188,13 +188,13 @@ app.post '/webhooks/mirrored-card', (request, response) ->
           Neo.execute '''
             MATCH (target:Card {shortLink: {TGT}})
             MATCH (sc:Comment {id: {SCID}})
-            MATCH (target)-[:HAS]->(ta:Comment)-[:LINKED_TO]-(sc)
-            RETURN ta
+            MATCH (target)-[:HAS]->(tc:Comment)-[:LINKED_TO]-(sc)
+            RETURN tc
           ''',
             TGT: target
             SCID: data.action.id
         ).then((res) ->
-          return res[0]['ta'].id
+          return res[0]['tc'].id
         ).then((targetCommentId) ->
           date = moment(action.date).format('MMMM Do YYYY, h:mm:ssa UTC')
           text = '>' + data.action.text.replace /\n/g, '\n>'
@@ -210,13 +210,13 @@ app.post '/webhooks/mirrored-card', (request, response) ->
           Neo.execute '''
             MATCH (target:Card {shortLink: {TGT}})
             MATCH (sc:Comment {id: {SCID}})
-            MATCH (target)-[:HAS]->(ta:Comment)-[:LINKED_TO]-(sc)
-            RETURN ta
+            MATCH (target)-[:HAS]->(tc:Comment)-[:LINKED_TO]-(sc)
+            RETURN tc
           ''',
             TGT: target
             SCID: data.action.id
         ).then((res) ->
-          return res[0]['ta'].id
+          return res[0]['tc'].id
         ).then((targetCommentId) ->
           Trello.delAsync "/1/cards/#{target}/actions/#{targetCommentId}/comments"
           Neo.execute '''
