@@ -119,10 +119,14 @@ app.post '/webhooks/mirrored-card', (request, response) ->
   Promise.resolve().then(->
     Neo.execute '''
       MATCH (source:Card {shortLink: {SL}})
+      SET source.name = {NAME}
+      WITH source
       MATCH (source)-[:MIRRORS]-(target:Card)
+      SET target.name = {NAME}
       RETURN target, source
     ''',
       SL: data.card.shortLink
+      NAME: data.card.name
   ).then((res) ->
     targets = (row['target'].shortLink for row in res)
     console.log '> will update', targets
@@ -132,17 +136,8 @@ app.post '/webhooks/mirrored-card', (request, response) ->
       when "updateCard"
         changed = Object.keys(data.old)[0]
         if changed in ['name', 'due', 'desc']
-          Trello.putAsync("/1/cards/#{target}/#{changed}"
+          Trello.putAsync "/1/cards/#{target}/#{changed}"
           , value: data.card[changed]
-          ).then(->
-            if changed == 'name'
-              Neo.execute '''
-                MATCH (card:Card {shortLink: {SL}})
-                SET card.name = {NAME}
-              ''',
-                SL: data.card.shortLink
-                NAME: data.card[changed]
-          )
         else if changed =='idAttachmentCover'
           Promise.resolve().then(->
             if not data.card.idAttachmentCover
@@ -294,7 +289,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
           Neo.execute '''
             MATCH (target:Card {shortLink: {TGT}})
             MATCH (scl:Checklist {id: {SCLID}})
-            MATCH (scl)-[:LINKED_TO]-(taclChecklist)<-[:HAS]-(target)
+            MATCH (scl)-[:LINKED_TO]-(tcl:Checklist)<-[:HAS]-(target)
             RETURN tcl
           ''',
             SRC: data.card.shortLink
@@ -305,9 +300,9 @@ app.post '/webhooks/mirrored-card', (request, response) ->
         ).then((targetChecklistId) ->
           Trello.delAsync "/1/cards/#{target}/checklists/#{targetChecklistId}"
           Neo.execute '''
-            MATCH (scl {id: {SCLID}})-[srel]-()
-            MATCH (tcl {id: {TCLID}})-[trel]-()
-            DELETE srel, trel, scl, tcl
+            MATCH (sci:CheckItem)<-[:CONTAINS]-(scl {id: {SCLID}})-[srel]-()
+            MATCH (tci:CheckItem)<-[:CONTAINS]-(tcl {id: {TCLID}})-[trel]-()
+            DELETE srel, trel, scl, tcl, tci, sci
           ''',
             SCLID: data.checklist.id
             TCLID: targetChecklistId
@@ -317,34 +312,32 @@ app.post '/webhooks/mirrored-card', (request, response) ->
           Neo.execute '''
             MATCH (target:Card {shortLink: {TGT}})
             MATCH (scl:Checklist {id: {SCLID}})
-            MATCH (scl)-[:LINKED_TO]-(taclChecklist)<-[:HAS]-(target)
+            MATCH (scl)-[:LINKED_TO]-(tcl:Checklist)<-[:HAS]-(target)
             RETURN tcl
           ''',
-            SRC: data.card.shortLink
             TGT: target
-            SCLID: data.checklist
+            SCLID: data.checklist.id
         ).then((res) ->
-          targetChecklistId = res[0]['tcl'].id
-        ).then((targetCheckListId) ->
+          return res[0]['tcl'].id
+        ).then((targetChecklistId) ->
           Trello.postAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem"
           , name: data.checkItem.name
         ).then((newCheckItem) ->
           Neo.execute '''
             MATCH (scl:Checklist {id: {SCLID}})
-            MATCH (tcl:Checklist {id: {TCLID}})
+            MATCH (tcl:Checklist)-[:LINKED_TO]-(scl)
             MERGE (scl)-[:CONTAINS]->(sci:CheckItem {id: {SCIID}})
-            MERGE (scl)-[:CONTAINS]->(tci:CheckItem {id: {TCIID}})
+            MERGE (tcl)-[:CONTAINS]->(tci:CheckItem {id: {TCIID}})
             MERGE (sci)-[:LINKED_TO]->(tci)
           ''',
             SCLID: data.checklist.id
-            TCLID: targetChecklistId
             SCIID: data.checkItem.id
             TCIID: newCheckItem.id
         )
       when "updateCheckItem", "updateCheckItemStateOnCard", "deleteCheckItem"
         checkids = Promise.resolve().then(->
           Neo.execute '''
-            MATCH (target:Card {id: {TGT}})
+            MATCH (target:Card {shortLink: {TGT}})
             MATCH (tcl:Checklist)<-[:HAS]-(target)
             MATCH (sci:CheckItem {id: {SCIID}})
             MATCH (tcl)-[:CONTAINS]->(tci:CheckItem)-[:LINKED_TO]-(sci)
@@ -353,6 +346,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             SCIID: data.checkItem.id
             TGT: target
         ).then((res) ->
+          console.log res
           return [res[0]['tcl'].id, res[0]['tci'].id]
         )
 
