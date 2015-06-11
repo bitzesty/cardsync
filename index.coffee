@@ -71,8 +71,10 @@ app.post '/webhooks/trello-bot', (request, response) ->
         console.log 'webhook deleted'
 
         Neo.execute '''
-          MATCH (card:Card {shortLink: {SL}})-[rel]-()
-          DELETE rel, card
+          MATCH (card:Card {shortLink: {SL}})
+          MATCH (card)-[drel:HAS]->(direct)
+          MATCH (direct)-[idrel:CONTAINS]-(indirect)
+          DELETE card, idrel, drel, direct, indirect
         ''',
           SL: payload.action.data.card.shortLink
       ).then(->
@@ -110,8 +112,10 @@ app.post '/webhooks/mirrored-card', (request, response) ->
 
   if action.type == "deleteCard"
     Neo.execute '''
-      MATCH (card:Card {shortLink: {SL}})-[rel]-()
-      DELETE rel, card
+      MATCH (card:Card {shortLink: {SL}})
+      MATCH (card)-[drel:HAS]->(direct)
+      MATCH (direct)-[idrel:CONTAINS]-(indirect)
+      DELETE card, idrel, drel, direct, indirect
     ''',
       SL: payload.model.shortUrl.split('/')[4]
     return
