@@ -39,15 +39,15 @@ app.post '/webhooks/trello-bot', (request, response) ->
 
         Neo.execute '''
           MERGE (card:Card {shortLink: {SL}})
-          SET card.webhook = {WH}
-          SET card.name = {NAME}
+            SET card.webhook = {WH}
           MERGE (user:User {id: {USERID}})
-          MERGE (user)-[:CONTROLS]->(card)
+          MERGE (user)-[:OWNS]->(card)
           WITH user, card
-          MATCH (user)-[:CONTROLS]->(others:Card)
-            WHERE NOT others.shortLink = {SL} AND
-                  others.name = card.name
-          MERGE (card)-[:MIRRORS]->(others)
+          MERGE (user)-[:OWNS]->(i)-[:MIRRORS]->(source:Source {name: {NAME}})
+          MERGE (card)-[:MIRRORS]->(source)
+          WITH i WHERE i.shortLink IS NULL
+            MATCH (i)-[r]-()
+            DELETE i, r
         ''',
           SL: payload.action.data.card.shortLink
           NAME: payload.action.data.card.name
@@ -71,10 +71,16 @@ app.post '/webhooks/trello-bot', (request, response) ->
         console.log 'webhook deleted'
 
         Neo.execute '''
-          MATCH (card:Card {shortLink: {SL}})
-          MATCH (card)-[drel:HAS]->(direct)
-          MATCH (direct)-[idrel:CONTAINS]-(indirect)
-          DELETE card, idrel, drel, direct, indirect
+          MATCH (card:Card {shortLink: {SL}})<-[owsh:OWNS]-()
+          OPTIONAL MATCH (card)-[drel:HAS]->(direct)
+          OPTIONAL MATCH (direct)-[idrel:CONTAINS]-(indirect)
+          OPTIONAL MATCH (card)-[cr:MIRRORS]->(source:Source)
+          DELETE card, owsh, cr, idrel, drel, direct, indirect
+
+          WITH source
+            OPTIONAL MATCH (source)<-[or:MIRRORS]-(others:Card)
+            WITH source, others WHERE others IS NULL
+              DELETE source
         ''',
           SL: payload.action.data.card.shortLink
       ).then(->
@@ -112,22 +118,28 @@ app.post '/webhooks/mirrored-card', (request, response) ->
 
   if action.type == "deleteCard"
     Neo.execute '''
-      MATCH (card:Card {shortLink: {SL}})
-      MATCH (card)-[drel:HAS]->(direct)
-      MATCH (direct)-[idrel:CONTAINS]-(indirect)
-      DELETE card, idrel, drel, direct, indirect
+      MATCH (card:Card {shortLink: {SL}})<-[owsh:OWNS]-()
+      OPTIONAL MATCH (card)-[drel:HAS]->(direct)
+      OPTIONAL MATCH (direct)-[idrel:CONTAINS]-(indirect)
+      OPTIONAL MATCH (card)-[cr:MIRRORS]->(source:Source)
+      DELETE card, owsh, cr, idrel, drel, direct, indirect
+
+      WITH source
+        OPTIONAL MATCH (source)<-[or:MIRRORS]-(others:Card)
+        WITH source, others WHERE others IS NULL
+          DELETE source
     ''',
       SL: payload.model.shortUrl.split('/')[4]
     return
 
   Promise.resolve().then(->
     Neo.execute '''
-      MATCH (source:Card {shortLink: {SL}})
+      MATCH (original:Card {shortLink: {SL}})-[:MIRRORS]->(source:Source)
       SET source.name = {NAME}
-      WITH source
-      MATCH (source)-[:MIRRORS]-(target:Card)
-      SET target.name = {NAME}
-      RETURN target, source
+      WITH source, original
+        MATCH (source)<-[:MIRRORS]-(target:Card)
+          WHERE target <> original
+        RETURN target, source
     ''',
       SL: data.card.shortLink
       NAME: data.card.name
@@ -148,16 +160,15 @@ app.post '/webhooks/mirrored-card', (request, response) ->
               return ''
 
             return Neo.execute('''
-              MATCH (target:Card {shortLink: {TGT}})
-              MATCH (sa:Attachment {id: {SAID}})
-              MATCH (sa)-[:LINKED_TO]-(ta:Attachment)<-[:HAS]-(target)
-              RETURN ta
+              MATCH (target:Card {shortLink: {TGT}})-->(source:Source)
+              MATCH (source)-[:HAS]->(att:Attachment)-[:CORRESPONDS_TO {id: {OAID}}]-()
+              MATCH (att)-[c:CORRESPONDS_TO]-(target)
+              RETURN c.id AS taid
             ''',
               TGT: target
-              SAID: data.card.idAttachmentCover
+              OAID: data.card.idAttachmentCover
             ).then((res) ->
-              console.log res
-              return res[0]['ta'].id
+              return res[0]['taid']
             )
           ).then((targetAttachmentId) ->
             console.log 'taid', targetAttachmentId
@@ -176,29 +187,29 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             """
         ).then((newComment) ->
           Neo.execute '''
-            MATCH (source:Card {shortLink: {SRC}})
+            MATCH (original:Card {shortLink: {ORIG}})
             MATCH (target:Card {shortLink: {TGT}})
-            MERGE (source)-[:HAS]->(sc:Comment {id: {SCID}})
-            MERGE (target)-[:HAS]->(tc:Comment {id: {TCID}})
-            MERGE (sc)-[:LINKED_TO]->(tc)
+            MATCH (original)-[:MIRRORS]->(source:Source)<-[:MIRRORS]-(target)
+            MERGE (source)-[:HAS]->(comm:Comment)-[:CORRESPONDS_TO {id: {OCID}}]->(original)
+            CREATE (comm)-[:CORRESPONDS_TO {id: {TCID}}]->(target)
           ''',
-            SRC: data.card.shortLink
+            ORIG: data.card.shortLink
             TGT: target
-            SCID: action.id
+            OCID: action.id
             TCID: newComment.id
         )
       when "updateComment"
         Promise.resolve().then(->
           Neo.execute '''
-            MATCH (target:Card {shortLink: {TGT}})
-            MATCH (sc:Comment {id: {SCID}})
-            MATCH (target)-[:HAS]->(tc:Comment)-[:LINKED_TO]-(sc)
-            RETURN tc
+            MATCH (target:Card {shortLink: {TGT}})-->(source:Source)
+            MATCH (source)-[:HAS]->(comm:Comment)-[:CORRESPONDS_TO {id: {OCID}}]-()
+            MATCH (comm)-[c:CORRESPONDS_TO]-(target)
+            RETURN c.id AS tcid
           ''',
             TGT: target
-            SCID: data.action.id
+            OCID: data.action.id
         ).then((res) ->
-          return res[0]['tc'].id
+          return res[0]['tcid']
         ).then((targetCommentId) ->
           date = moment(action.date).format('MMMM Do YYYY, h:mm:ssa UTC')
           text = '>' + data.action.text.replace /\n/g, '\n>'
@@ -212,23 +223,28 @@ app.post '/webhooks/mirrored-card', (request, response) ->
       when "deleteComment"
         Promise.resolve().then(->
           Neo.execute '''
-            MATCH (target:Card {shortLink: {TGT}})
-            MATCH (sc:Comment {id: {SCID}})
-            MATCH (target)-[:HAS]->(tc:Comment)-[:LINKED_TO]-(sc)
-            RETURN tc
+            MATCH (target:Card {shortLink: {TGT}})-->(source:Source)
+            MATCH (source)-[:HAS]->(comm:Comment)-[:CORRESPONDS_TO {id: {OCID}}]-()
+            MATCH (comm)-[c:CORRESPONDS_TO]-(target)
+            RETURN c.id AS tcid
           ''',
             TGT: target
-            SCID: data.action.id
+            OCID: data.action.id
         ).then((res) ->
-          return res[0]['tc'].id
+          return res[0]['tcid']
         ).then((targetCommentId) ->
           Trello.delAsync "/1/cards/#{target}/actions/#{targetCommentId}/comments"
           Neo.execute '''
-            MATCH (sc {id: {SCID}})-[srel]-()
-            MATCH (tc {id: {TCID}})-[trel]-()
-            DELETE srel, trel, sc, tc
+            MATCH (comm:Comment)-[c:CORRESPONDS_TO {id: {TCID}}]-(target)
+            DELETE c
+            WITH comm, target
+              OPTIONAL MATCH (comm)-[cr:CORRESPONDS_TO]-(cards:Card)
+                WHERE cr.id <> {OCID}
+              WITH cards, comm WHERE cards IS NULL
+                MATCH (comm)-[r]-()
+                DELETE comm, r
           ''',
-            SCID: data.action.id
+            OCID: data.action.id
             TCID: targetCommentId
         )
       when "addAttachmentToCard"
@@ -237,38 +253,42 @@ app.post '/webhooks/mirrored-card', (request, response) ->
           , {url: data.attachment.url, name: data.attachment.name}
         ).then((newAttachment) ->
           Neo.execute '''
-            MATCH (source:Card {shortLink: {SRC}})
+            MATCH (original:Card {shortLink: {ORIG}})
             MATCH (target:Card {shortLink: {TGT}})
-            MERGE (source)-[:HAS]->(sa:Attachment {id: {SAID}})
-            MERGE (target)-[:HAS]->(ta:Attachment {id: {TAID}})
-            MERGE (sa)-[:LINKED_TO]->(ta)
+            MATCH (original)-[:MIRRORS]->(source:Source)<-[:MIRRORS]-(target)
+            MERGE (source)-[:HAS]->(att:Attachment)-[:CORRESPONDS_TO {id: {OAID}}]->(original)
+            CREATE (att)-[:CORRESPONDS_TO {id: {TAID}}]->(target)
           ''',
-            SRC: data.card.shortLink
+            ORIG: data.card.shortLink
             TGT: target
-            SAID: data.attachment.id
+            OAID: data.attachment.id
             TAID: newAttachment.id
         )
       when "deleteAttachmentFromCard"
         Promise.resolve().then(->
           Neo.execute '''
-            MATCH (target:Card {shortLink: {TGT}})
-            MATCH (sa:Attachment {id: {SAID}})
-            MATCH (sa)-[:LINKED_TO]-(ta:Attachment)<-[:HAS]-(target)
-            RETURN ta
+            MATCH (target:Card {shortLink: {TGT}})-->(source:Source)
+            MATCH (source)-[:HAS]->(att:Attachment)-[:CORRESPONDS_TO {id: {OAID}}]-()
+            MATCH (att)-[c:CORRESPONDS_TO]-(target)
+            RETURN c.id AS taid
           ''',
-            SRC: data.card.shortLink
             TGT: target
-            SAID: data.attachment.id
+            OAID: data.attachment.id
         ).then((res) ->
-          return res[0]['ta'].id
+          return res[0]['taid']
         ).then((targetAttachmentId) ->
           Trello.delAsync "/1/cards/#{target}/attachments/#{targetAttachmentId}"
           Neo.execute '''
-            MATCH (sa {id: {SAID}})-[srel]-()
-            MATCH (ta {id: {TAID}})-[trel]-()
-            DELETE srel, trel, sa, ta
+            MATCH (att:Attachment)-[c:CORRESPONDS_TO {id: {TAID}}]-(target)
+            DELETE c
+            WITH att, target
+              OPTIONAL MATCH (att)-[cr:CORRESPONDS_TO]-(cards:Card)
+                WHERE cr.id <> {OAID}
+              WITH cards, att WHERE cards IS NULL
+                MATCH (att)-[r]-()
+                DELETE att, r
           ''',
-            SAID: data.attachment.id
+            OAID: data.attachment.id
             TAID: targetAttachmentId
         )
       when "addChecklistToCard"
@@ -277,81 +297,85 @@ app.post '/webhooks/mirrored-card', (request, response) ->
           , name: data.checklist.name
         ).then((newChecklist) ->
           Neo.execute '''
-            MATCH (source:Card {shortLink: {SRC}})
+            MATCH (original:Card {shortLink: {ORIG}})
             MATCH (target:Card {shortLink: {TGT}})
-            MERGE (source)-[:HAS]->(scl:Checklist {id: {SCLID}})
-            MERGE (target)-[:HAS]->(tcl:Checklist {id: {TCLID}})
-            MERGE (scl)-[:LINKED_TO]->(tcl)
+            MATCH (original)-[:MIRRORS]->(source:Source)<-[:MIRRORS]-(target)
+            MERGE (source)-[:HAS]->(chl:Checklist)-[:CORRESPONDS_TO {id: {OCLID}}]->(original)
+            CREATE (chl)-[:CORRESPONDS_TO {id: {TCLID}}]->(target)
           ''',
-            SRC: data.card.shortLink
+            ORIG: data.card.shortLink
             TGT: target
-            SCLID: data.checklist.id
+            OCLID: data.checklist.id
             TCLID: newChecklist.id
         )
       when "removeChecklistFromCard"
         Promise.resolve().then(->
           Neo.execute '''
-            MATCH (target:Card {shortLink: {TGT}})
-            MATCH (scl:Checklist {id: {SCLID}})
-            MATCH (scl)-[:LINKED_TO]-(tcl:Checklist)<-[:HAS]-(target)
-            RETURN tcl
+            MATCH (target:Card {shortLink: {TGT}})-->(source:Source)
+            MATCH (source)-[:HAS]->(chl:Checklist)-[:CORRESPONDS_TO {id: {OCLID}}]-()
+            MATCH (chl)-[c:CORRESPONDS_TO]-(target)
+            RETURN c.id AS tclid
           ''',
-            SRC: data.card.shortLink
             TGT: target
-            SCLID: data.checklist.id
+            OCLID: data.checklist.id
         ).then((res) ->
-          return res[0]['tcl'].id
+          return res[0]['tclid']
         ).then((targetChecklistId) ->
           Trello.delAsync "/1/cards/#{target}/checklists/#{targetChecklistId}"
           Neo.execute '''
-            MATCH (sci:CheckItem)<-[:CONTAINS]-(scl {id: {SCLID}})-[srel]-()
-            MATCH (tci:CheckItem)<-[:CONTAINS]-(tcl {id: {TCLID}})-[trel]-()
-            DELETE srel, trel, scl, tcl, tci, sci
+            MATCH (chl:Checklist)-[c:CORRESPONDS_TO {id: {TCLID}}]-(target)
+            DELETE c
+            WITH chl, target
+              OPTIONAL MATCH (chl)-[cr:CORRESPONDS_TO]-(cards:Card)
+                WHERE cr.id <> {OCLID}
+              WITH cards, chl WHERE cards IS NULL
+                MATCH (chl)-[r]-()
+                MATCH (chl)-[cir]-(chi:CheckItem)-[cisr]-()
+                DELETE chl, r, cir, chi, cisr
           ''',
-            SCLID: data.checklist.id
+            OCLID: data.checklist.id
             TCLID: targetChecklistId
         )
       when "createCheckItem"
         Promise.resolve().then(->
           Neo.execute '''
-            MATCH (target:Card {shortLink: {TGT}})
-            MATCH (scl:Checklist {id: {SCLID}})
-            MATCH (scl)-[:LINKED_TO]-(tcl:Checklist)<-[:HAS]-(target)
-            RETURN tcl
+            MATCH (target:Card {shortLink: {TGT}})-->(source:Source)
+            MATCH (source)-[:HAS]->(chl:Checklist)-[:CORRESPONDS_TO {id: {OCLID}}]-()
+            MATCH (chl)-[c:CORRESPONDS_TO]-(target)
+            RETURN c.id AS tclid
           ''',
             TGT: target
-            SCLID: data.checklist.id
+            OCLID: data.checklist.id
         ).then((res) ->
-          return res[0]['tcl'].id
+          return res[0]['tclid']
         ).then((targetChecklistId) ->
           Trello.postAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem"
           , name: data.checkItem.name
         ).then((newCheckItem) ->
           Neo.execute '''
-            MATCH (scl:Checklist {id: {SCLID}})
-            MATCH (tcl:Checklist)-[:LINKED_TO]-(scl)
-            MERGE (scl)-[:CONTAINS]->(sci:CheckItem {id: {SCIID}})
-            MERGE (tcl)-[:CONTAINS]->(tci:CheckItem {id: {TCIID}})
-            MERGE (sci)-[:LINKED_TO]->(tci)
+            MATCH (target:Card {shortLink: {TGT}})
+            MATCH (chl:Checklist)-[:CORRESPONDS_TO {id: {OCLID}}]-(original:Card)
+            MERGE (chl)-[:CONTAINS]->(chi:CheckItem)-[:CORRESPONDS_TO {id: {OCIID}}]->(original)
+            CREATE (chi)-[:CORRESPONDS_TO {id: {TCIID}}]->(target)
           ''',
-            SCLID: data.checklist.id
-            SCIID: data.checkItem.id
+            TGT: target
+            OCLID: data.checklist.id
+            OCIID: data.checkItem.id
             TCIID: newCheckItem.id
         )
       when "updateCheckItem", "updateCheckItemStateOnCard", "deleteCheckItem"
         checkids = Promise.resolve().then(->
           Neo.execute '''
             MATCH (target:Card {shortLink: {TGT}})
-            MATCH (tcl:Checklist)<-[:HAS]-(target)
-            MATCH (sci:CheckItem {id: {SCIID}})
-            MATCH (tcl)-[:CONTAINS]->(tci:CheckItem)-[:LINKED_TO]-(sci)
-            RETURN tcl, tci
+            MATCH (chi:CheckItem)-[:CORRESPONDS_TO {id: {OCIID}}]-(original:Card)
+            MATCH (chl:Checklist)-[:CONTAINS]->(chi)-[ctci:CORRESPONDS_TO]-(target)
+            MATCH (chl)-[ctcl:CORRESPONDS_TO]-(target)
+            RETURN ctcl.id AS tclid, ctci.id AS tciid
           ''',
-            SCIID: data.checkItem.id
+            OCIID: data.checkItem.id
             TGT: target
         ).then((res) ->
-          console.log res
-          return [res[0]['tcl'].id, res[0]['tci'].id]
+          return [res[0]['tclid'], res[0]['tciid']]
         )
 
         switch payload.action.type
@@ -369,11 +393,16 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             checkids.spread((targetChecklistId, targetCheckItemId) ->
               Trello.delAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem/#{targetCheckItemId}"
               Neo.execute '''
-                MATCH (tci:CheckItem {id: {TCIID}})-[trel]-()
-                MATCH (sci:CheckItem {id: {SCIID}})-[srel]-()
-                DELETE trel, srel, tci, sci
+                MATCH (chl:CheckItem)-[c:CORRESPONDS_TO {id: {TCIID}}]-(target:Card)
+                DELETE c
+                WITH chl, target
+                  OPTIONAL MATCH (chi)-[cr:CORRESPONDS_TO]-(cards:Card)
+                    WHERE cr.id <> {OCIID}
+                  WITH cards, chi WHERE cards IS NULL
+                    MATCH (chi)-[r]-()
+                    DELETE chi, r
               ''',
-                SCIID: data.checkItem.id
+                OCIID: data.checkItem.id
                 TCIID: targetCheckItemId
             )
   ).then(->
