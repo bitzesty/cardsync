@@ -10,7 +10,8 @@
     "express": "^4.12.4",
     "moment": "^2.10.3",
     "node-trello": "^1.1.2",
-    "rainbird-neo4j": "^0.4.0"
+    "rainbird-neo4j": "^0.4.0",
+    "raygun": "^0.6.2"
   },
   "devDependencies": {
     "coffee-script": "^1.9.3"

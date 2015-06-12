@@ -3,6 +3,7 @@ settings   = require './settings'
 Promise    = require 'bluebird'
 Neo4j      = require 'rainbird-neo4j'
 NodeTrello = require 'node-trello'
+raygun     = require 'raygun'
 moment     = require 'moment'
 express    = require 'express'
 bodyParser = require 'body-parser'
@@ -11,6 +12,7 @@ Trello = Promise.promisifyAll new NodeTrello settings.TRELLO_API_KEY, settings.T
 Neo = new Neo4j settings.NEO4J_URL
 Neo.queryAsync = Promise.promisify Neo.query
 Neo.execute = -> Neo.queryAsync.apply(Neo, arguments).then((res) -> res[0][0])
+raygunClient = new raygun.Client().init(apiKey: settings.RAYGUN_APIKEY)
 
 app = express()
 app.use '/static', express.static('static')
@@ -407,7 +409,11 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             )
   ).then(->
     console.log '> everything done.'
-  ).catch(console.log.bind console)
+  ).catch((e) ->
+    raygunClient.send e, {'message': 'error catched in the .catch handler'}, (->), request
+  )
+
+app.use raygunClient.expressHandler
 
 port = process.env.PORT or 5000
 app.listen port, '0.0.0.0', ->
