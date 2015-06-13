@@ -36,6 +36,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
       Trello.putAsync('/1/webhooks',
         callbackURL: settings.SERVICE_URL + '/webhooks/mirrored-card'
         idModel: payload.action.data.card.id
+        description: 'cardsync webhook for card https://trello.com/c/' + payload.action.data.card.id
       ).then((data) ->
         console.log 'webhook created'
 
