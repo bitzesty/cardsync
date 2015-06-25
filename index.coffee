@@ -396,9 +396,9 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             checkids.spread((targetChecklistId, targetCheckItemId) ->
               Trello.delAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem/#{targetCheckItemId}"
               Neo.execute '''
-                MATCH (chl:CheckItem)-[c:CORRESPONDS_TO {id: {TCIID}}]-(target:Card)
+                MATCH (chi:CheckItem)-[c:CORRESPONDS_TO {id: {TCIID}}]-(target:Card)
                 DELETE c
-                WITH chl, target
+                WITH chi, target
                   OPTIONAL MATCH (chi)-[cr:CORRESPONDS_TO]-(cards:Card)
                     WHERE cr.id <> {OCIID}
                   WITH cards, chi WHERE cards IS NULL
