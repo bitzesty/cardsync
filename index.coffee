@@ -194,7 +194,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             MATCH (target:Card {shortLink: {TGT}})
             MATCH (original)-[:MIRRORS]->(source:Source)<-[:MIRRORS]-(target)
             MERGE (source)-[:HAS]->(comm:Comment)-[:CORRESPONDS_TO {id: {OCID}}]->(original)
-            CREATE (comm)-[:CORRESPONDS_TO {id: {TCID}}]->(target)
+            MERGE (comm)-[:CORRESPONDS_TO {id: {TCID}}]->(target)
           ''',
             ORIG: data.card.shortLink
             TGT: target
@@ -260,7 +260,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             MATCH (target:Card {shortLink: {TGT}})
             MATCH (original)-[:MIRRORS]->(source:Source)<-[:MIRRORS]-(target)
             MERGE (source)-[:HAS]->(att:Attachment)-[:CORRESPONDS_TO {id: {OAID}}]->(original)
-            CREATE (att)-[:CORRESPONDS_TO {id: {TAID}}]->(target)
+            MERGE (att)-[:CORRESPONDS_TO {id: {TAID}}]->(target)
           ''',
             ORIG: data.card.shortLink
             TGT: target
@@ -304,7 +304,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             MATCH (target:Card {shortLink: {TGT}})
             MATCH (original)-[:MIRRORS]->(source:Source)<-[:MIRRORS]-(target)
             MERGE (source)-[:HAS]->(chl:Checklist)-[:CORRESPONDS_TO {id: {OCLID}}]->(original)
-            CREATE (chl)-[:CORRESPONDS_TO {id: {TCLID}}]->(target)
+            MERGE (chl)-[:CORRESPONDS_TO {id: {TCLID}}]->(target)
           ''',
             ORIG: data.card.shortLink
             TGT: target
@@ -359,7 +359,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             MATCH (target:Card {shortLink: {TGT}})
             MATCH (chl:Checklist)-[:CORRESPONDS_TO {id: {OCLID}}]-(original:Card)
             MERGE (chl)-[:CONTAINS]->(chi:CheckItem)-[:CORRESPONDS_TO {id: {OCIID}}]->(original)
-            CREATE (chi)-[:CORRESPONDS_TO {id: {TCIID}}]->(target)
+            MERGE (chi)-[:CORRESPONDS_TO {id: {TCIID}}]->(target)
           ''',
             TGT: target
             OCLID: data.checklist.id
