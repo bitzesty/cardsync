@@ -178,6 +178,29 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             Trello.putAsync "1/cards/#{target}/idAttachmentCover"
             , value: targetAttachmentId
           )
+        else if changed == "idList"
+          console.log "update list!"
+          newListName = data.listAfter.name
+          console.log "newListName = '#{newListName}'"
+          Trello.getAsync("1/cards/#{target}").then((card) ->
+            idBoard = card.idBoard
+            console.log "idBoard = #{idBoard}"
+
+            currentListId = card.idList
+            console.log "currentListId = #{currentListId}"
+
+            Trello.getAsync("1/boards/#{idBoard}/lists").then((lists) ->
+              newListId = null
+              console.log "lists = #{JSON.stringify(lists)}"
+              for index, list of lists
+                if list.name == newListName
+                  newListId = list.id
+              console.log "newListId = #{newListId}"
+              if newListId != currentListId
+                console.log "Moving card from #{currentListId} to #{newListId}"
+                Trello.putAsync "/1/cards/#{target}/#{changed}", value: newListId
+            )
+          )
       when "commentCard"
         Promise.resolve().then(->
           date = moment(action.date).format('MMMM Do YYYY, h:mm:ssa UTC')
