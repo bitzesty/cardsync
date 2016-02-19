@@ -23,7 +23,7 @@
   * `TRELLO_BOT_ID`
   * `TRELLO_BOT_TOKEN`
 8. `coffee index.coffee` to start the app (maybe it's `./node_modules/.bin/coffee` depending on your setup).
-9. On another shell, set a webhook to monitor the bot account pointing to your app's address: `curl -X PUT https://api.trello.com/1/webhooks -d '{"description": "bot main webhook", "callbackURL": "$SERVICE_URL/trello-bot", "idModel": "$TRELLO_BOT_ID"}'` (ensure these variables are being replaced correctly according to the ones you've set up before, or replace them manually in your call.)
+9. On another shell, set a webhook to monitor the bot account pointing to your app's address: `curl -X PUT https://api.trello.com/1/webhooks -d '{"description": "bot main webhook", "callbackURL": "$SERVICE_URL/webhooks/trello-bot", "idModel": "$TRELLO_BOT_ID"}'` (ensure these variables are being replaced correctly according to the ones you've set up before, or replace them manually in your call.)
 
 That's it. Your bot is running, you can start adding it to some cards.
 
