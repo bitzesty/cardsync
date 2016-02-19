@@ -184,7 +184,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
           text = '>' + data.text.replace /\n/g, '\n>'
           Trello.postAsync "/1/cards/#{target}/actions/comments"
           , text: """
-            [#{action.memberCreator.username}](https://trello.com/#{action.memberCreator.username}) on [#{date}](https://trello.com/c/#{data.card.shortLink})[:](http://websitesfortrello.com/)
+            [#{action.memberCreator.username}](https://trello.com/#{action.memberCreator.username}) on [#{date}](https://trello.com/c/#{data.card.shortLink})
 
             #{text}
             """
@@ -218,7 +218,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
           text = '>' + data.action.text.replace /\n/g, '\n>'
           Trello.putAsync "/1/cards/#{target}/actions/#{targetCommentId}/comments"
           , text: """
-            [#{action.memberCreator.username}](https://trello.com/#{action.memberCreator.username}) on [#{date}](https://trello.com/c/#{data.card.shortLink})[:](http://websitesfortrello.com/)
+            [#{action.memberCreator.username}](https://trello.com/#{action.memberCreator.username}) on [#{date}](https://trello.com/c/#{data.card.shortLink})
 
             #{text}
             """
