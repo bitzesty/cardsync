@@ -18,6 +18,9 @@ app = express()
 app.use '/static', express.static('static')
 app.use bodyParser.json()
 
+app.get '/', (req, res) ->
+  res.status(200).json({status:"ok"})
+
 sendOk = (request, response) ->
   console.log 'trello checks this endpoint when creating a webhook'
   response.send 'ok'
