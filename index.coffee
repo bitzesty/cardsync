@@ -366,7 +366,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             TCLID: targetChecklistId
         )
       when "createCheckItem"
-        Promise.resolve().then(->
+        checkids = Promise.resolve().then(->
           Neo.execute '''
             MATCH (target:Card {shortLink: {TGT}})-->(source:Source)
             MATCH (source)-[:HAS]->(chl:Checklist)-[:CORRESPONDS_TO {id: {OCLID}}]-()
@@ -376,7 +376,11 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             TGT: target
             OCLID: data.checklist.id
         ).then((res) ->
-          return res[0]['tclid']
+          if res.length == 0
+            console.log "Checklist was not updated because it is not under sync"
+            return checkids.cancel();
+          else
+            return res[0]['tclid']
         ).then((targetChecklistId) ->
           Trello.postAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem"
           , name: data.checkItem.name
@@ -404,22 +408,26 @@ app.post '/webhooks/mirrored-card', (request, response) ->
             OCIID: data.checkItem.id
             TGT: target
         ).then((res) ->
-          return [res[0]['tclid'], res[0]['tciid']]
+          if res.length == 0
+            console.log "Checklist was not updated because it is not under sync"
+            return checkids.cancel();
+          else
+            return [res[0]['tclid'], res[0]['tciid']]
         )
 
         switch payload.action.type
           when "updateCheckItem"
-            checkids.spread((targetChecklistId, targetCheckItemId) ->
+            checkids = checkids.spread((targetChecklistId, targetCheckItemId) ->
               Trello.putAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem/#{targetCheckItemId}/name"
               , value: data.checkItem.name
             )
           when "updateCheckItemStateOnCard"
-            checkids.spread((targetChecklistId, targetCheckItemId) ->
+            checkids = checkids.spread((targetChecklistId, targetCheckItemId) ->
               Trello.putAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem/#{targetCheckItemId}/state"
               , value: data.checkItem.state
             )
           when "deleteCheckItem"
-            checkids.spread((targetChecklistId, targetCheckItemId) ->
+            checkids = checkids.spread((targetChecklistId, targetCheckItemId) ->
               Trello.delAsync "/1/cards/#{target}/checklist/#{targetChecklistId}/checkItem/#{targetCheckItemId}"
               Neo.execute '''
                 MATCH (chi:CheckItem)-[c:CORRESPONDS_TO {id: {TCIID}}]-(target:Card)
