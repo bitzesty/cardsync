@@ -199,7 +199,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
                 if list.name == newListName
                   newListId = list.id
               console.log "newListId = #{newListId}"
-              if newListId != currentListId
+              if (newListId != null) && (newListId != currentListId)
                 console.log "Moving card from #{currentListId} to #{newListId}"
                 Trello.putAsync "/1/cards/#{target}/#{changed}", value: newListId
             )
