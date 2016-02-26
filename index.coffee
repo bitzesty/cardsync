@@ -7,6 +7,13 @@ raygun     = require 'raygun'
 moment     = require 'moment'
 express    = require 'express'
 bodyParser = require 'body-parser'
+Redis      = require 'then-redis'
+url        = require 'url'
+zipObject  = require 'lodash.zipobject'
+values     = require 'lodash.values'
+
+
+refbot     = require './refbot'
 
 Trello = Promise.promisifyAll new NodeTrello settings.TRELLO_API_KEY, settings.TRELLO_BOT_TOKEN
 Neo = new Neo4j settings.NEO4J_URL
@@ -24,8 +31,9 @@ app.get '/', (req, res) ->
 sendOk = (request, response) ->
   console.log 'trello checks this endpoint when creating a webhook'
   response.send 'ok'
-app.get '/webhooks/trello-bot', sendOk
-app.get '/webhooks/mirrored-card', sendOk
+app.get '/webhooks/trello-bot', sendOk    # global
+app.get '/webhooks/mirrored-card', sendOk # cardsync
+app.get '/webhooks/tracked-board', sendOk # refbot
 
 app.post '/webhooks/trello-bot', (request, response) ->
   payload = request.body
@@ -34,6 +42,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
   response.send 'ok'
 
   switch payload.action.type
+    #cardsync hook
     when 'addMemberToCard'
       # add webhook to this card
       Trello.putAsync('/1/webhooks',
@@ -136,6 +145,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
         )
       ).catch(console.log.bind console)
 
+    #cardsync hook
     when 'removeMemberFromCard'
       Promise.resolve().then(->
         Neo.execute '''
@@ -165,6 +175,30 @@ app.post '/webhooks/trello-bot', (request, response) ->
       ).then(->
         console.log 'card deleted from db'
       ).catch(console.log.bind console)
+
+    #refbot hook
+    when 'addMemberToBoard'
+        # add webhook to this board
+        Trello.putAsync('/1/webhooks',
+          callbackURL: settings.SERVICE_URL + '/webhooks/tracked-board'
+          idModel: payload.action.data.board.id
+          description: 'refbot webhook for this board'
+        ).then((data) ->
+          console.log 'added to board', payload.action.data.board.name, 'webhook created'
+        ).catch(console.log.bind console)
+
+    #refbot hook
+    when 'removeMemberFromBoard'
+        Promise.resolve().then(->
+          Trello.getAsync '/1/token/' + settings.TRELLO_BOT_TOKEN + '/webhooks'
+        ).then((webhooks) ->
+          for webhook in webhooks
+            if webhook.idModel == payload.action.data.board.id
+              Trello.delAsync '/1/webhooks/' + webhook.id
+        ).spread(->
+          console.log 'webhook deleted'
+        ).catch(console.log.bind console)
+
 
 app.post '/webhooks/mirrored-card', (request, response) ->
   payload = request.body
@@ -524,5 +558,7 @@ app.post '/webhooks/mirrored-card', (request, response) ->
 app.use raygunClient.expressHandler
 
 port = process.env.PORT or 5000
+
+refbot.addRefbotHooks app
 app.listen port, '0.0.0.0', ->
   console.log 'running at 0.0.0.0:' + port
