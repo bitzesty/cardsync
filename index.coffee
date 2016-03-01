@@ -60,7 +60,80 @@ app.post '/webhooks/trello-bot', (request, response) ->
           WH: data.id
           USERID: payload.action.memberCreator.id
       ).then( ->
-        console.log 'card added to db'
+        sourceShortLink = payload.action.data.card.shortLink;
+        sourceCardName  = payload.action.data.card.name;
+        console.log "card '#{sourceShortLink}' added to db"
+        Trello.getAsync("/1/cards/#{sourceShortLink}/checklists").then((sourceChecklists) ->
+          console.log JSON.stringify("sourceChecklists = #{JSON.stringify(sourceChecklists)}")
+
+          Promise.resolve().then(->
+            Neo.execute '''
+              MATCH (original:Card {shortLink: {SL}})-[:MIRRORS]->(source:Source)
+              SET source.name = {NAME}
+              WITH source, original
+                MATCH (source)<-[:MIRRORS]-(target:Card)
+                  WHERE target <> original
+                RETURN target, source
+            ''',
+              SL: sourceShortLink
+              NAME: sourceCardName
+          ).then((res) ->
+            targets = (row['target'].shortLink for row in res)
+            console.log '> will sync', targets
+            return targets
+          ).map((target) ->
+            console.log "Syncing #{JSON.stringify(target)}"
+
+            Trello.getAsync("/1/cards/#{target}/checklists").then((targetChecklists) ->
+              console.log JSON.stringify("targetChecklists = #{JSON.stringify(targetChecklists)}")
+
+              updateChecklists = Promise.resolve().then( ->
+                [0...sourceChecklists.length ]
+              ).map((i) ->
+                sourceChecklist = sourceChecklists[i]
+                targetChecklist = targetChecklists[i]
+                if !targetChecklist?
+                  console.log  "Skyped checklist! the list does not exist in target card."
+                  updateChecklists.cancel
+                else
+                  console.log  "SYNCING CHECKLISTS #{sourceChecklist.id} to #{targetChecklist.id}"
+
+                  Promise.resolve().then(->
+                    Neo.execute '''
+                      MATCH (original:Card {shortLink: {ORIG}})
+                      MATCH (target:Card {shortLink: {TGT}})
+                      MATCH (original)-[:MIRRORS]->(source:Source)<-[:MIRRORS]-(target)
+                      MERGE (source)-[:HAS]->(chl:Checklist)-[:CORRESPONDS_TO {id: {OCLID}}]->(original)
+                      MERGE (chl)-[:CORRESPONDS_TO {id: {TCLID}}]->(target)
+                    ''',
+                      ORIG: sourceShortLink
+                      TGT: target
+                      OCLID: sourceChecklist.id
+                      TCLID: targetChecklist.id
+                  ).then(->
+                    for j in [0...sourceChecklist.checkItems.length]
+                      sourceCheckItem = sourceChecklist.checkItems[j]
+                      targetCheckItem = targetChecklist.checkItems[j]
+
+                      if targetCheckItem?
+                        console.log  "Syncing checkitems #{sourceCheckItem.id} to #{targetCheckItem.id}"
+                        Neo.execute '''
+                          MATCH (target:Card {shortLink: {TGT}})
+                          MATCH (chl:Checklist)-[:CORRESPONDS_TO {id: {OCLID}}]-(original:Card)
+                          MERGE (chl)-[:CONTAINS]->(chi:CheckItem)-[:CORRESPONDS_TO {id: {OCIID}}]->(original)
+                          MERGE (chi)-[:CORRESPONDS_TO {id: {TCIID}}]->(target)
+                        ''',
+                          TGT: target
+                          OCLID: sourceChecklist.id
+                          OCIID: sourceCheckItem.id
+                          TCIID: targetCheckItem.id
+                      else
+                        console.log  "Skyped checkitem! the item does not exist in target checklist."
+                  )
+              )
+            )
+          )
+        )
       ).catch(console.log.bind console)
 
     when 'removeMemberFromCard'
