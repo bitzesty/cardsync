@@ -28,6 +28,13 @@ app.use bodyParser.json()
 app.get '/', (req, res) ->
   res.status(200).json({status:"ok"})
 
+matchCheckItem = (sourceCheckItem, targetCheckItems) ->
+  for checkItem in targetCheckItems
+    if checkItem.name == sourceCheckItem.name
+      return checkItem
+  return null
+
+
 sendOk = (request, response) ->
   console.log 'trello checks this endpoint when creating a webhook'
   response.send 'ok'
@@ -122,7 +129,7 @@ app.post '/webhooks/trello-bot', (request, response) ->
                   ).then(->
                     for j in [0...sourceChecklist.checkItems.length]
                       sourceCheckItem = sourceChecklist.checkItems[j]
-                      targetCheckItem = targetChecklist.checkItems[j]
+                      targetCheckItem = matchCheckItem(sourceCheckItem, targetChecklist.checkItems);
 
                       if targetCheckItem?
                         console.log  "Syncing checkitems #{sourceCheckItem.id} to #{targetCheckItem.id}"
