@@ -6,3 +6,4 @@ module.exports.SERVICE_URL   = process.env.SERVICE_URL or 'http://mirror.website
 module.exports.CONTACT_EMAIL = process.env.CONTACT_EMAIL or 'team@websitesfortrello.com'
 
 module.exports.NEO4J_URL = process.env.NEO4J_URL or process.env.GRAPHSTORY_URL or process.env.GRAPHENEDB_URL
+module.exports.REDIS_URL = process.env.REDIS_URL
